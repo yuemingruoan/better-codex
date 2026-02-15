@@ -4278,11 +4278,17 @@ async fn run_sampling_request(
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
     let mut input = input;
-    if let Some(item) = spec_parallel_priority_instruction_item(turn_context.as_ref()) {
-        input.push(item);
-    }
-    if let Some(item) = spec_sdd_planning_instruction_item(turn_context.as_ref()) {
-        input.push(item);
+    let should_inject_spec_instruction_items = matches!(
+        input.last().and_then(parse_turn_item),
+        Some(TurnItem::UserMessage(_))
+    );
+    if should_inject_spec_instruction_items {
+        if let Some(item) = spec_parallel_priority_instruction_item(turn_context.as_ref()) {
+            input.push(item);
+        }
+        if let Some(item) = spec_sdd_planning_instruction_item(turn_context.as_ref()) {
+            input.push(item);
+        }
     }
     let router = built_tools(
         sess.as_ref(),

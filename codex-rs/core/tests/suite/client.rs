@@ -40,6 +40,7 @@ use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
+use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_once_match;
@@ -955,6 +956,95 @@ async fn sdd_planning_override_keeps_parallel_priority_injection() {
     assert!(
         !second_has_sdd_spec,
         "second request should not include SDD Planning spec after disabling"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spec_instructions_only_injected_for_user_prompt_sampling_requests() {
+    skip_if_no_network!();
+    let server = MockServer::start().await;
+
+    let call_id = "call-1";
+    let plan_args = json!({
+        "plan": [
+            {"step": "Inspect workspace", "status": "in_progress"}
+        ],
+    })
+    .to_string();
+    let resp_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp1"),
+                ev_function_call(call_id, "update_plan", &plan_args),
+                ev_completed("resp1"),
+            ]),
+            sse(vec![ev_response_created("resp2"), ev_completed("resp2")]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::from_api_key("Test API Key"))
+        .with_config(|config| {
+            config.spec.parallel_priority = true;
+            config.spec.sdd_planning = true;
+        });
+    let codex = builder
+        .build(&server)
+        .await
+        .expect("create new conversation")
+        .codex;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = resp_mock.requests();
+    assert_eq!(requests.len(), 2);
+
+    let parallel_spec_text = tr(Language::En, "prompt.spec.parallel_priority");
+    let sdd_spec_text = tr(Language::En, "prompt.spec.sdd_planning");
+    let first_has_parallel_spec = requests[0]
+        .message_input_texts("user")
+        .iter()
+        .any(|text| text.contains(parallel_spec_text));
+    let first_has_sdd_spec = requests[0]
+        .message_input_texts("user")
+        .iter()
+        .any(|text| text.contains(sdd_spec_text));
+    let second_has_parallel_spec = requests[1]
+        .message_input_texts("user")
+        .iter()
+        .any(|text| text.contains(parallel_spec_text));
+    let second_has_sdd_spec = requests[1]
+        .message_input_texts("user")
+        .iter()
+        .any(|text| text.contains(sdd_spec_text));
+
+    assert!(
+        first_has_parallel_spec,
+        "first request should include Parallel Priority spec"
+    );
+    assert!(
+        first_has_sdd_spec,
+        "first request should include SDD Planning spec"
+    );
+    assert!(
+        !second_has_parallel_spec,
+        "follow-up request should not include Parallel Priority spec"
+    );
+    assert!(
+        !second_has_sdd_spec,
+        "follow-up request should not include SDD Planning spec"
     );
 }
 
