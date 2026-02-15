@@ -416,3 +416,10 @@
 
 - 当前待办：
   - 手工删除本地分支 `sdd/sub-agent-edit-read-grep-run-we`（当前会话策略拦截自动删除）。
+
+## 2026-02-16 00:41:50 CST
+- Finalized collab/preset/sdd integration on branch `sdd/1-collab-collab-collab-plan-prox` and synced `.codex/task.md` completion status (`T1`-`T14` marked done).
+- Updated docs for new behaviors: `/collab` Plan/Proxy/Close gating, `/spec` collab dependency for Parallel Priority, `/preset` action changes, and `/sdd-develop` branch timing.
+- Verified release build with `cd codex-rs && cargo build -p codex-cli --release` (success, warnings only).
+
+- No pending items

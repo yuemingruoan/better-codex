@@ -1510,8 +1510,88 @@ async fn slash_fork_opens_picker() {
 }
 
 #[tokio::test]
+async fn slash_collab_selection_plan_enables_feature() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.features.disable(Feature::Collab);
+
+    chat.dispatch_command(SlashCommand::Collab);
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let mut saw_update = false;
+    let mut saw_persist = false;
+    while let Ok(ev) = rx.try_recv() {
+        saw_update |= matches!(ev, AppEvent::UpdateCollabFeature(true));
+        saw_persist |= matches!(ev, AppEvent::PersistCollabFeature { enabled: true });
+    }
+    assert!(saw_update, "Plan should enable collab feature in app state");
+    assert!(saw_persist, "Plan should persist collab feature = true");
+}
+
+#[tokio::test]
+async fn slash_collab_selection_proxy_enables_feature() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.features.disable(Feature::Collab);
+
+    chat.dispatch_command(SlashCommand::Collab);
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let mut saw_update = false;
+    let mut saw_persist = false;
+    while let Ok(ev) = rx.try_recv() {
+        saw_update |= matches!(ev, AppEvent::UpdateCollabFeature(true));
+        saw_persist |= matches!(ev, AppEvent::PersistCollabFeature { enabled: true });
+    }
+    assert!(
+        saw_update,
+        "Proxy should enable collab feature in app state"
+    );
+    assert!(saw_persist, "Proxy should persist collab feature = true");
+}
+
+#[tokio::test]
+async fn slash_collab_selection_close_disables_feature() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.features.enable(Feature::Collab);
+
+    chat.dispatch_command(SlashCommand::Collab);
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let mut saw_update = false;
+    let mut saw_persist = false;
+    while let Ok(ev) = rx.try_recv() {
+        saw_update |= matches!(ev, AppEvent::UpdateCollabFeature(false));
+        saw_persist |= matches!(ev, AppEvent::PersistCollabFeature { enabled: false });
+    }
+    assert!(
+        saw_update,
+        "Close should disable collab feature in app state"
+    );
+    assert!(saw_persist, "Close should persist collab feature = false");
+}
+
+#[tokio::test]
+async fn slash_spec_selection_blocks_parallel_priority_enable_when_collab_disabled() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.features.disable(Feature::Collab);
+    chat.config.spec.parallel_priority = false;
+
+    chat.dispatch_command(SlashCommand::Spec);
+    chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert!(
+        rx.try_recv().is_err(),
+        "parallel priority should not be enable-able when collab is disabled"
+    );
+}
+
+#[tokio::test]
 async fn slash_spec_selection_enables_parallel_priority() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.features.enable(Feature::Collab);
     chat.config.spec.parallel_priority = false;
 
     chat.dispatch_command(SlashCommand::Spec);
@@ -1540,6 +1620,7 @@ async fn slash_spec_selection_enables_parallel_priority() {
 #[tokio::test]
 async fn slash_spec_selection_disables_parallel_priority() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.features.disable(Feature::Collab);
     chat.config.spec.parallel_priority = true;
 
     chat.dispatch_command(SlashCommand::Spec);
@@ -1562,6 +1643,47 @@ async fn slash_spec_selection_disables_parallel_priority() {
     assert_matches!(
         rx.try_recv(),
         Ok(AppEvent::PersistSpecParallelPriority { enabled: false })
+    );
+}
+
+#[tokio::test]
+async fn preset_actions_popup_hides_clear_overrides() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.open_subagent_preset_actions(SubagentPreset::Edit);
+
+    let width = 90;
+    let height = chat.desired_height(width);
+    let area = ratatui::layout::Rect::new(0, 0, width, height);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    chat.render(area, &mut buf);
+
+    let mut rendered = String::new();
+    for y in 0..area.height {
+        for x in 0..area.width {
+            let symbol = buf[(x, y)].symbol();
+            if symbol.is_empty() {
+                rendered.push(' ');
+            } else {
+                rendered.push_str(symbol);
+            }
+        }
+        rendered.push('\n');
+    }
+
+    assert!(
+        !rendered.contains(tr(
+            chat.config.language,
+            "chatwidget.preset_popup.action_clear_model"
+        )),
+        "preset popup should not show clear model action: {rendered}"
+    );
+    assert!(
+        !rendered.contains(tr(
+            chat.config.language,
+            "chatwidget.preset_popup.action_clear_reasoning"
+        )),
+        "preset popup should not show clear reasoning action: {rendered}"
     );
 }
 
@@ -1693,6 +1815,47 @@ async fn sdd_develop_parallels_plan_approval_sends_execute_prompt_without_create
             )
         }),
         "parallels approval should not trigger create-branch git action"
+    );
+}
+
+#[tokio::test]
+async fn sdd_develop_standard_creates_branch_before_plan_prompt() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command_with_args(
+        SlashCommand::SddDevelop,
+        "implement standard workflow".to_string(),
+    );
+    let initial_ops = drain_ops(&mut op_rx);
+    assert!(
+        initial_ops.iter().any(|op| {
+            matches!(
+                op,
+                Op::SddGitAction {
+                    action: SddGitAction::CreateBranch { .. }
+                }
+            )
+        }),
+        "standard workflow should create branch first"
+    );
+    assert!(
+        initial_ops.iter().all(|op| find_text_input(op).is_none()),
+        "standard workflow should not emit plan prompt before branch creation"
+    );
+
+    chat.on_task_complete(None);
+    let post_branch_ops = drain_ops(&mut op_rx);
+    let plan_prompt = post_branch_ops
+        .iter()
+        .find_map(find_text_input)
+        .expect("branch creation completion should emit plan prompt");
+    let plan_prefix = tr(chat.config.language, "prompt.sdd_plan")
+        .lines()
+        .next()
+        .expect("plan template should have first line");
+    assert!(
+        plan_prompt.contains(plan_prefix),
+        "expected standard plan prompt after branch creation, got: {plan_prompt}"
     );
 }
 
