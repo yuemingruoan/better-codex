@@ -1,6 +1,6 @@
 {
   "name": "@openai/codex-shell-tool-mcp",
-  "version": "1.7.2",
+  "version": "1.7.3",
   "description": "Codex MCP server for the shell tool with patched Bash and exec wrappers.",
   "license": "Apache-2.0",
   "bin": {

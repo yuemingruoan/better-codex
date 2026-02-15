@@ -1,5 +1,57 @@
 # Release Notes / 发布说明
 
+## v1.7.3 (changes since 1.7.2)
+
+### English
+
+#### Release Scope
+- Merged all updates from `develop-main` into `main` for this release window.
+- Integrated `6` commits since `v1.7.2` (`49 files changed`, `+2,035 / -180`).
+- Bumped release version to `1.7.3` across workspace and package artifacts.
+
+#### Collaboration Presets & TUI2 Workflow
+- Restored TUI2 `/collab` entry and aligned its behavior with collab experimental gating.
+- Added TUI2 `/preset` for sub-agent presets (`edit`, `read`, `grep`, `run`, `websearch`) with runtime update + config persistence.
+- Added planning-mode integration for `/sdd-develop` and `/sdd-develop-parallels`, including automatic plan/default mode transitions.
+- Updated `/spec` interaction to support tabular checkbox-style selection (`[ ]`, `Tab`, `Enter`) and expanded multi-agent guidance.
+
+#### Config, Injection & Prompt Behavior
+- Added `sub_agent_presets` and `spec.sdd_planning` config surfaces, with persistent edit APIs and schema updates.
+- Extended collab tool schema/adapter to support preset-aware sub-agent spawning while preserving existing agent types.
+- Refined spec-instruction injection scope: `parallel_priority` / `sdd_planning` prompts are injected only for user-prompt sampling requests, not follow-up tool/report loops.
+
+#### i18n, Docs & Structure
+- Added/updated bilingual (English/Chinese) prompt and UI copy for presets, SDD planning guidance, and sub-agent naming conventions.
+- Updated `docs/config.md` and `docs/slash_commands.md` for `/preset`, `/collab`, and new spec controls.
+- Removed legacy release-note file `docs/release-notes/1.6.5.md` as part of docs structure cleanup.
+
+---
+
+### 中文
+
+#### 发布范围
+- 本次发布将 `develop-main` 上的更新完整并入 `main`。
+- 纳入自 `v1.7.2` 以来 `6` 个提交（`49` 个文件变更，`+2,035 / -180`）。
+- workspace 与相关包版本统一升级至 `1.7.3`。
+
+#### 协作预设与 TUI2 工作流
+- 恢复 TUI2 `/collab` 入口，并与 collab experimental 门禁保持一致。
+- 新增 TUI2 `/preset`，支持子 Agent 预设（`edit`、`read`、`grep`、`run`、`websearch`）的运行时调整与配置持久化。
+- 为 `/sdd-develop` 与 `/sdd-develop-parallels` 增加 planning 阶段模式切换，自动在 plan/default 模式间转换。
+- 更新 `/spec` 交互为表格式复选选择（`[ ]`、`Tab`、`Enter`），并扩展多 Agent 指导文案。
+
+#### 配置、注入与提示词行为
+- 增加 `sub_agent_presets` 与 `spec.sdd_planning` 配置能力，并补齐持久化编辑 API 与 schema。
+- 扩展 collab 工具 schema/adapter，支持按 preset 生成子 Agent 参数，同时保持既有 agent type 不变。
+- 收敛规范注入范围：`parallel_priority` / `sdd_planning` 提示词仅在用户提示请求时注入，不再在工具 follow-up/汇报循环中重复附加。
+
+#### i18n、文档与结构
+- 新增/更新中英文提示词与 UI 文案，覆盖预设说明、SDD planning 规范、按职责命名子 Agent 指引。
+- 更新 `docs/config.md` 与 `docs/slash_commands.md`，补充 `/preset`、`/collab` 与新 spec 开关说明。
+- 清理遗留发布说明文件 `docs/release-notes/1.6.5.md`，完成文档结构收口。
+
+---
+
 ## v1.7.2 (changes since 1.7.1)
 
 ### English
