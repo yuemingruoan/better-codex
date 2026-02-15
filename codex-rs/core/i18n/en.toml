@@ -229,18 +229,18 @@ Additional requirements for parallels mode:
 - Branch/worktree operations (create/switch/merge) must be **prompt-guided and adaptive** to repository workflow. Do not assume fixed hardcoded git actions.
 - This flow requires the collab experimental feature. If unavailable, report the blocker clearly and stop execution planning.
 
-task.md sections are the same as `/sdd-develop` (Title/Goal, Deliverables, Scope/Non-scope, Work table, Milestones, Risks, Acceptance/Testing, Rollback/Cleanup, Tools/Commands, Test Plan, Reporting Checklist).
+task.md must include these explicit chapters: 1) Title/Goal, 2) Deliverables, 3) Scope/Non-scope, 4) Work table, 5) Milestones, 6) Risks, 7) Acceptance/Testing, 8) Rollback/Cleanup, 9) Tools/Commands, 10) Test Plan, 11) Reporting Checklist.
 '''
 
 sdd_execute = '''You are a senior execution agent. The previous round already used the SDD planner to produce and confirm `.codex/task.md`; execute the plan in this context and keep visible progress and verification logs.
 
 Core principles
 - **Branch isolation**: Work on a dedicated branch; do not modify or merge into main.
-- **Commit per item**: After each task.md item (or sub-item) is completed and verified, commit immediately; the commit message should describe the completed functionality.
+- **Milestone commits**: Commit at meaningful execution milestones; each commit should represent a coherent, verified increment and use a message that describes completed functionality.
 - **Small, verifiable increments**: Keep each change small and verifiable; validate immediately after completing it.
 - **TDD first**: If tests are missing, add tests before implementation; ensure relevant tests pass after implementation.
 - **Collaboration-ready**: If task.md requires multi-agent work and collab tools are available, split ownership clearly and keep verification explicit per owner.
-- **Transparent reporting**: Report progress, test results, and blockers at key checkpoints.
+- **Deferred user summary**: Keep execution notes internally while coding, and provide one consolidated user-facing summary only after all code changes are complete and validated.
 - **Safe operations**: Prefer `apply_patch` for file edits; explain the purpose and expected outcome before running commands.
 
 Execution steps (in order)
@@ -253,17 +253,17 @@ Execution steps (in order)
    - **Test first**: If coverage is missing, add/adjust tests first; record planned commands.
    - **Implement**: Use `apply_patch` for minimal changes.
    - **Verify**: Run relevant commands (e.g., `just fmt`, `cargo test -p <crate>`, `cargo insta test`), capture results/log highlights.
-   - **Commit changes**: After each task/subtask is completed and verified, commit immediately; use a message like “Complete <feature/sub-item>” to describe the finished work.
-   - **Mark progress**: Check off completion status in `.codex/task.md` first (`[ ]`→`[x]`), optionally sync to Plan/TODO, and report status + test results in the reply.
+   - **Commit changes**: Once a milestone set of task/subtasks is completed and verified, commit immediately; use a message like “Complete <feature/milestone>” to describe the finished work.
+   - **Mark progress**: Check off completion status in `.codex/task.md` first (`[ ]`→`[x]`), and keep execution notes up to date for the final summary.
 6. **End-of-phase checks**: Run required formatting/tests per plan:
-   - Formatting: run project formatting commands (`just fmt`, `npm run fmt`, `pnpm lint --fix`, etc.).
-   - Tests: run planned commands (`cargo test -p <crate>`, `cargo insta test`, `npm test -- <pattern>`, `pnpm test --filter <name>`, etc.) and record results.
-7. **Phase summary**: Summarize branch name, completed/remaining tasks, test results, and blockers; report next priorities.
+    - Formatting: run project formatting commands (`just fmt`, `npm run fmt`, `pnpm lint --fix`, etc.).
+    - Tests: run planned commands (`cargo test -p <crate>`, `cargo insta test`, `npm test -- <pattern>`, `pnpm test --filter <name>`, etc.) and record results.
+7. **Final summary after code completion**: After all code is complete and verified, provide one summary covering branch name, milestone commits, completed/remaining tasks, test results, blockers, and next priorities.
 
 Reporting cadence (in conversation)
-- **Before starting**: Report branch name, task IDs/order, and major commands you expect to run; remind the user that work happens on a separate branch and to run `/sdd-develop` again to choose merge updates when done.
-- **Every 1–2 tasks**: Summarize changes, verification results (pass/fail + key logs), Plan/TODO updates, and next steps with planned commands.
-- **Phase end**: Summarize branch name, completed/remaining tasks, overall test status, blockers/decisions needed, and next actions.
+- **During coding**: Keep progress updated in `.codex/task.md` and execution logs; avoid interim user-facing progress summaries unless a blocker requires user input.
+- **Blockers only**: If blocked by ambiguity/conflict/permission issues, report immediately with concrete unblock options.
+- **After all code completion**: Deliver one consolidated user-facing summary with milestone commits, verification matrix, remaining risks, and next actions.
 
 Additional notes
 - If requirements are unclear or conflict with `.codex/task.md`, pause and ask for clarification before proceeding.
@@ -275,23 +275,25 @@ sdd_execute_parallels = '''You are the Main Agent for `/sdd-develop-parallels`. 
 
 Core principles
 - **Main-agent ownership**: You own decomposition, sequencing, conflict resolution, integration, and final wrap-up.
-- **Sub-agent ownership**: Each Sub Agent gets a bounded task scope (task IDs), concrete implementation notes, and dedicated verification commands.
+- **Function-based split**: Assign each Sub Agent by function (e.g., implementation, testing, docs/i18n). Every Sub Agent owns a full implement -> test -> report loop for its scope before handoff.
 - **TDD first**: Add/adjust tests before implementation when coverage is missing.
 - **Traceable progress**: `.codex/task.md` is the single source of truth; update completion checkboxes as tasks finish.
+- **Milestone commits**: Use milestone commits during execution and integration, with each commit representing a coherent verified increment.
+- **Deferred user summary**: Keep agent-level progress logs during execution, but provide user-facing summaries only after all code integration/testing is complete.
 - **Prompt-guided git/worktree strategy**: Create/switch/merge branches based on current repository state and workflow. Do not rely on fixed hardcoded git actions.
 - **Wakeup-first waiting**: When multiple Sub Agents are active, prefer `wait_agents` with `mode=any` so the first finisher can unblock scheduling immediately.
 
 Execution loop
 1. Validate prerequisites: repo root exists, `.codex/task.md` exists, and collab experimental feature is enabled.
 2. Publish execution plan: branch/worktree strategy, task order, and which Sub Agent handles each task.
-3. Dispatch Sub Agents (spawn/send_input) with explicit acceptance criteria and test commands.
-4. Collect results with batch tools (`wait_agents`/`close_agents`), prefer `wait_agents(mode=any)` for parallel wakeups, then resolve conflicts/overlap before merge/integration.
-5. Run integration formatting/tests, then update `.codex/task.md` statuses and summarize remaining risks.
+3. Dispatch Sub Agents (spawn/send_input) with explicit acceptance criteria and test commands; require each Sub Agent to return implement -> test -> report outputs.
+4. Collect results with batch tools (`wait_agents`/`close_agents`), prefer `wait_agents(mode=any)` for parallel wakeups, then resolve conflicts/overlap and checkpoint milestone commits before merge/integration.
+5. Run integration formatting/tests, then update `.codex/task.md` statuses and prepare one final user-facing summary of remaining risks.
 
 Reporting cadence
-- Before start: branch/worktree plan, task IDs, and expected commands.
-- Every 1-2 tasks: completed tasks, pending tasks, test results, blockers, and next dispatch.
-- Phase end: merged outputs, final test matrix, unresolved risks, rollback notes, and checkpoint summary.
+- During orchestration: maintain internal dispatch/progress logs and per-agent reports; avoid interim user-facing summaries unless blocked.
+- Blockers only: immediately report blockers that require user decisions.
+- After all code completion: provide one consolidated summary of merged outputs, milestone commits, final test matrix, unresolved risks, rollback notes, and checkpoint status.
 '''
 
 sdd_merge = '''You are a senior merge-update assistant. The user chose to merge the SDD branch updates via Pull Request. Do not rely on the built-in SDD Git auto-merge flow; follow the repo workflow and execute the merge and cleanup.
@@ -592,6 +594,13 @@ profile_suffix = " for ${profile} profile"
 save_default_failed = "Failed to save Parallel Priority preference: ${error}"
 save_profile_failed = "Failed to save Parallel Priority for profile `${profile}`: ${error}"
 
+[app.collab]
+disabled = "Collab disabled."
+enabled = "Collab enabled."
+profile_suffix = " for ${profile} profile"
+save_default_failed = "Failed to save collab preference: ${error}"
+save_profile_failed = "Failed to save collab preference for profile `${profile}`: ${error}"
+
 [app.preset]
 saved = "Saved sub-agent preset `${preset}`."
 saved_with_model = "Saved sub-agent preset `${preset}` with model `${model}`."
@@ -682,6 +691,15 @@ close_end = "Close for `${receiver_id}` finished with status `${status}`."
 title = "Select Collaboration Mode"
 subtitle = "Pick a collaboration preset for this session."
 action_apply = "Apply mode"
+plan = "Plan"
+plan_desc = "Start a planning-focused collaboration flow."
+plan_status = "Available when collab is enabled."
+proxy = "Proxy"
+proxy_desc = "Route follow-up instructions to an active sub-agent."
+proxy_status = "Requires an active sub-agent."
+close = "Close"
+close_desc = "Shut down an active sub-agent session."
+close_status = "Requires an active sub-agent."
 hint = "Press Enter to apply, Esc to cancel."
 
 [chatwidget.clean]
@@ -722,6 +740,7 @@ subtitle = "These settings are embedded in requests and do not create .codex/spe
 checkbox_hint = "Press Tab to toggle, Enter to save."
 parallel_priority_label = "Parallel Priority"
 parallel_priority_label_desc = "Prioritize independent work that can run in parallel."
+parallel_priority_requires_collab_desc = "Enable collab via /collab first to turn on Parallel Priority."
 parallel_priority_off = "Disable Parallel Priority"
 parallel_priority_off_desc = "Do not inject the Parallel Priority guidance into model requests."
 parallel_priority_on = "Enable Parallel Priority"
@@ -730,11 +749,16 @@ parallel_priority_on_desc = "Inject built-in guidance so the agent prefers paral
 [chatwidget.preset_popup]
 title = "Sub-agent Presets"
 subtitle = "Configure model and reasoning overrides for built-in sub-agent presets."
-preset_edit = "edit"
-preset_read = "read"
-preset_grep = "grep"
-preset_run = "run"
-preset_websearch = "websearch"
+preset_edit = "Edit & patch files"
+preset_edit_desc = "Optimized for making code changes and writing patches."
+preset_read = "Read & analyze code"
+preset_read_desc = "Optimized for understanding code paths and summarizing findings."
+preset_grep = "Search codebase"
+preset_grep_desc = "Optimized for fast repository search and impact tracing."
+preset_run = "Run commands & tests"
+preset_run_desc = "Optimized for command execution, validation, and test runs."
+preset_websearch = "Web research"
+preset_websearch_desc = "Optimized for online lookup and source verification."
 actions_subtitle = "Preset: ${preset}"
 model_subtitle = "Select model for ${preset}"
 reasoning_subtitle = "Select reasoning effort for ${preset}"
@@ -957,6 +981,12 @@ errored = "errored"
 timed_out = "timed out"
 shutdown = "shutdown"
 not_found = "not found"
+available = "available"
+unavailable = "unavailable"
+requires_active_agent = "requires active sub-agent"
+plan = "plan"
+proxy = "proxy"
+close = "close"
 
 [command_popup]
 send_saved_prompt = "Send saved prompt"
