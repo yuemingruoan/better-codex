@@ -120,9 +120,6 @@ pub(crate) enum AppEvent {
     /// Update the current Parallel Priority spec toggle in the running app and widget.
     UpdateSpecParallelPriority(bool),
 
-    /// Update the current SDD Planning spec toggle in the running app and widget.
-    UpdateSpecSddPlanning(bool),
-
     /// Update one sub-agent preset model override in the running app and widget.
     UpdateSubagentPresetModel {
         preset: SubagentPreset,
@@ -148,11 +145,6 @@ pub(crate) enum AppEvent {
 
     /// Persist the selected Parallel Priority spec toggle to the appropriate config.
     PersistSpecParallelPriority {
-        enabled: bool,
-    },
-
-    /// Persist the selected SDD Planning spec toggle to the appropriate config.
-    PersistSpecSddPlanning {
         enabled: bool,
     },
 

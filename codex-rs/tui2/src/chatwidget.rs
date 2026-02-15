@@ -556,6 +556,8 @@ pub(crate) struct ChatWidget {
     sdd_git_action_failed: bool,
     // When true, start a fresh session after current turn completes (used for SDD abandon).
     sdd_new_session_after_cleanup: bool,
+    // Previous spec.sdd_planning value before SDD workflow auto-enables it.
+    sdd_spec_sdd_planning_restore: Option<bool>,
 }
 
 /// Snapshot of active-cell state that affects transcript overlay rendering.
@@ -852,6 +854,7 @@ impl ChatWidget {
                 }
                 SddGitPendingAction::FinalizeMerge => {
                     self.sdd_state = None;
+                    self.restore_sdd_planning_after_workflow();
                     self.add_info_message(
                         tr(self.config.language, "chatwidget.sdd.merge_completed").to_string(),
                         None,
@@ -859,6 +862,7 @@ impl ChatWidget {
                 }
                 SddGitPendingAction::AbandonBranch => {
                     self.sdd_state = None;
+                    self.restore_sdd_planning_after_workflow();
                     self.sdd_new_session_after_cleanup = true;
                     self.add_info_message(
                         tr(self.config.language, "chatwidget.sdd.branch_deleted").to_string(),
@@ -2087,6 +2091,7 @@ impl ChatWidget {
             sdd_pending_git_action: None,
             sdd_git_action_failed: false,
             sdd_new_session_after_cleanup: false,
+            sdd_spec_sdd_planning_restore: None,
         };
 
         widget.prefetch_rate_limits();
@@ -2197,6 +2202,7 @@ impl ChatWidget {
             sdd_pending_git_action: None,
             sdd_git_action_failed: false,
             sdd_new_session_after_cleanup: false,
+            sdd_spec_sdd_planning_restore: None,
         };
 
         widget.prefetch_rate_limits();
@@ -2651,6 +2657,7 @@ impl ChatWidget {
                 base_branch: None,
                 stage: SddDevelopStage::AwaitPlanDecision,
             });
+            self.enable_sdd_planning_for_workflow();
             self.set_sdd_collaboration_mode(ModeKind::Plan);
             let prompt = self.build_sdd_plan_prompt(&desc, workflow);
             self.submit_user_message(prompt.into());
@@ -2954,6 +2961,7 @@ impl ChatWidget {
             self.sdd_pending_git_action = None;
             self.sdd_git_action_failed = false;
             self.submit_user_message(prompt.into());
+            self.restore_sdd_planning_after_workflow();
             self.add_info_message(
                 tr(language, "chatwidget.sdd.merge_guidance_sent").to_string(),
                 Some(tr(language, "chatwidget.sdd.merge_guidance_hint_parallels").to_string()),
@@ -3057,9 +3065,9 @@ impl ChatWidget {
             )
         };
         if template.is_empty() {
-            description_block
+            self.inject_sdd_planning_prompt(description_block)
         } else {
-            format!("{template}\n\n{description_block}")
+            self.inject_sdd_planning_prompt(format!("{template}\n\n{description_block}"))
         }
     }
 
@@ -3097,7 +3105,9 @@ impl ChatWidget {
     }
 
     fn build_sdd_plan_rework_prompt(&self, _description: &str) -> String {
-        tr(self.config.language, "chatwidget.sdd.plan_rework_prompt").to_string()
+        self.inject_sdd_planning_prompt(
+            tr(self.config.language, "chatwidget.sdd.plan_rework_prompt").to_string(),
+        )
     }
 
     fn build_sdd_exec_prompt(&self, description: &str, workflow: SddWorkflow) -> String {
@@ -3111,9 +3121,9 @@ impl ChatWidget {
             tr(self.config.language, "chatwidget.sdd.requirement_label")
         );
         if template.is_empty() {
-            description_block
+            self.inject_sdd_planning_prompt(description_block)
         } else {
-            format!("{template}\n\n{description_block}")
+            self.inject_sdd_planning_prompt(format!("{template}\n\n{description_block}"))
         }
     }
 
@@ -3134,10 +3144,67 @@ impl ChatWidget {
             tr(self.config.language, "chatwidget.sdd.branch_label")
         );
         if template.is_empty() {
-            context_block
+            self.inject_sdd_planning_prompt(context_block)
         } else {
-            format!("{template}\n\n{context_block}")
+            self.inject_sdd_planning_prompt(format!("{template}\n\n{context_block}"))
         }
+    }
+
+    fn enable_sdd_planning_for_workflow(&mut self) {
+        if self.sdd_spec_sdd_planning_restore.is_none() {
+            self.sdd_spec_sdd_planning_restore = Some(self.config.spec.sdd_planning);
+        }
+        if self.config.spec.sdd_planning {
+            return;
+        }
+        self.config.spec.sdd_planning = true;
+        self.submit_op(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            collaboration_mode: None,
+            personality: None,
+            spec_parallel_priority: None,
+            spec_sdd_planning: Some(true),
+        });
+    }
+
+    fn restore_sdd_planning_after_workflow(&mut self) {
+        let Some(previous) = self.sdd_spec_sdd_planning_restore.take() else {
+            return;
+        };
+        if previous == self.config.spec.sdd_planning {
+            return;
+        }
+        self.config.spec.sdd_planning = previous;
+        self.submit_op(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            collaboration_mode: None,
+            personality: None,
+            spec_parallel_priority: None,
+            spec_sdd_planning: Some(previous),
+        });
+    }
+
+    fn inject_sdd_planning_prompt(&self, message: String) -> String {
+        if self.config.spec.sdd_planning {
+            return message;
+        }
+        let planning_prompt = tr(self.config.language, "prompt.spec.sdd_planning").trim();
+        if planning_prompt.is_empty() {
+            return message;
+        }
+        format!("{planning_prompt}\n\n{message}")
     }
     fn dispatch_command_with_args(&mut self, cmd: SlashCommand, args: String) {
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
@@ -3918,33 +3985,20 @@ impl ChatWidget {
     pub(crate) fn open_spec_popup(&mut self) {
         let language = self.config.language;
         let parallel_priority_enabled = self.config.spec.parallel_priority;
-        let sdd_planning_enabled = self.config.spec.sdd_planning;
-        let items = vec![
-            SelectionItem {
-                name: tr(language, "chatwidget.spec_popup.parallel_priority_label").to_string(),
-                description: Some(
-                    tr(
-                        language,
-                        "chatwidget.spec_popup.parallel_priority_label_desc",
-                    )
-                    .to_string(),
-                ),
-                is_current: parallel_priority_enabled,
-                actions: Self::spec_parallel_priority_selection_actions(!parallel_priority_enabled),
-                dismiss_on_select: false,
-                ..Default::default()
-            },
-            SelectionItem {
-                name: tr(language, "chatwidget.spec_popup.sdd_planning_label").to_string(),
-                description: Some(
-                    tr(language, "chatwidget.spec_popup.sdd_planning_label_desc").to_string(),
-                ),
-                is_current: sdd_planning_enabled,
-                actions: Self::spec_sdd_planning_selection_actions(!sdd_planning_enabled),
-                dismiss_on_select: false,
-                ..Default::default()
-            },
-        ];
+        let items = vec![SelectionItem {
+            name: tr(language, "chatwidget.spec_popup.parallel_priority_label").to_string(),
+            description: Some(
+                tr(
+                    language,
+                    "chatwidget.spec_popup.parallel_priority_label_desc",
+                )
+                .to_string(),
+            ),
+            is_current: parallel_priority_enabled,
+            actions: Self::spec_parallel_priority_selection_actions(!parallel_priority_enabled),
+            dismiss_on_select: false,
+            ..Default::default()
+        }];
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some(tr(language, "chatwidget.spec_popup.title").to_string()),
@@ -4488,26 +4542,6 @@ impl ChatWidget {
             }));
             tx.send(AppEvent::UpdateSpecParallelPriority(enabled));
             tx.send(AppEvent::PersistSpecParallelPriority { enabled });
-        })]
-    }
-
-    fn spec_sdd_planning_selection_actions(enabled: bool) -> Vec<SelectionAction> {
-        vec![Box::new(move |tx| {
-            tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
-                cwd: None,
-                approval_policy: None,
-                sandbox_policy: None,
-                windows_sandbox_level: None,
-                model: None,
-                effort: None,
-                summary: None,
-                collaboration_mode: None,
-                personality: None,
-                spec_parallel_priority: None,
-                spec_sdd_planning: Some(enabled),
-            }));
-            tx.send(AppEvent::UpdateSpecSddPlanning(enabled));
-            tx.send(AppEvent::PersistSpecSddPlanning { enabled });
         })]
     }
 
@@ -5579,11 +5613,6 @@ impl ChatWidget {
     /// Set the parallel-priority spec toggle in the widget's config copy.
     pub(crate) fn set_spec_parallel_priority(&mut self, enabled: bool) {
         self.config.spec.parallel_priority = enabled;
-    }
-
-    /// Set the sdd-planning spec toggle in the widget's config copy.
-    pub(crate) fn set_spec_sdd_planning(&mut self, enabled: bool) {
-        self.config.spec.sdd_planning = enabled;
     }
 
     /// Set one sub-agent preset model override in the widget's config copy.

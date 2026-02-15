@@ -501,6 +501,7 @@ async fn make_chatwidget_manual(
         sdd_pending_git_action: None,
         sdd_git_action_failed: false,
         sdd_new_session_after_cleanup: false,
+        sdd_spec_sdd_planning_restore: None,
     };
     (widget, rx, op_rx)
 }
@@ -1565,55 +1566,6 @@ async fn slash_spec_selection_disables_parallel_priority() {
 }
 
 #[tokio::test]
-async fn slash_spec_selection_enables_sdd_planning() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.config.spec.sdd_planning = false;
-
-    chat.dispatch_command(SlashCommand::Spec);
-    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-    chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-    assert_matches!(
-        rx.try_recv(),
-        Ok(AppEvent::CodexOp(Op::OverrideTurnContext {
-            spec_parallel_priority: None,
-            spec_sdd_planning: Some(true),
-            ..
-        }))
-    );
-    assert_matches!(rx.try_recv(), Ok(AppEvent::UpdateSpecSddPlanning(true)));
-    assert_matches!(
-        rx.try_recv(),
-        Ok(AppEvent::PersistSpecSddPlanning { enabled: true })
-    );
-}
-
-#[tokio::test]
-async fn slash_spec_selection_disables_sdd_planning() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.config.spec.sdd_planning = true;
-
-    chat.dispatch_command(SlashCommand::Spec);
-    chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-    assert_matches!(
-        rx.try_recv(),
-        Ok(AppEvent::CodexOp(Op::OverrideTurnContext {
-            spec_parallel_priority: None,
-            spec_sdd_planning: Some(false),
-            ..
-        }))
-    );
-    assert_matches!(rx.try_recv(), Ok(AppEvent::UpdateSpecSddPlanning(false)));
-    assert_matches!(
-        rx.try_recv(),
-        Ok(AppEvent::PersistSpecSddPlanning { enabled: false })
-    );
-}
-
-#[tokio::test]
 async fn slash_rollout_displays_current_path() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     let rollout_path = PathBuf::from("/tmp/codex-test-rollout.jsonl");
@@ -1692,6 +1644,18 @@ async fn sdd_develop_parallels_plan_approval_sends_execute_prompt_without_create
         "implement parallels workflow".to_string(),
     );
     let initial_ops = drain_ops(&mut op_rx);
+    assert!(
+        initial_ops.iter().any(|op| {
+            matches!(
+                op,
+                Op::OverrideTurnContext {
+                    spec_sdd_planning: Some(true),
+                    ..
+                }
+            )
+        }),
+        "expected parallels workflow to auto-enable SDD planning"
+    );
     let plan_prompt = initial_ops
         .iter()
         .find_map(find_text_input)
@@ -1769,6 +1733,18 @@ async fn sdd_develop_parallels_merge_sends_prompt_without_finalize_merge() {
             )
         }),
         "parallels merge should not trigger finalize-merge git action"
+    );
+    assert!(
+        merge_ops.iter().any(|op| {
+            matches!(
+                op,
+                Op::OverrideTurnContext {
+                    spec_sdd_planning: Some(false),
+                    ..
+                }
+            )
+        }),
+        "expected parallels workflow to restore SDD planning setting after merge handoff"
     );
 }
 

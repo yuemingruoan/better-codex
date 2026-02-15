@@ -165,12 +165,12 @@ init = '''请生成一个名为 AGENTS.md 的文件，为本仓库贡献者提�
 
 spec.parallel_priority = '''本会话已启用 Parallel Priority。
 
-在规划与执行任务时，优先识别并组织可并行推进的独立工作。将任务拆分为最小可验证增量，避免不必要的串行阻塞；涉及共享状态时，明确标注依赖与同步点。'''
+在多 Agent 协作任务中，优先组织可并行推进的独立工作轨道。为每个 sub-agent 明确职责归属，保持文件边界隔离，并在修改共享状态前定义同步点。'''
 
 spec.sdd_planning = '''本会话已启用 SDD Planning。
 
-当任务多步骤或需求仍不明确时，先切换到 planning 模式并确认里程碑后再执行。
-使用 `/spec` 时，请检查并配置 sub-agent presets，为不同职责匹配合适模型与推理强度。
+当任务多步骤或需求仍不明确时，先进入 planning 模式并确认里程碑后再执行。
+该指引用于 `/sdd-develop` 与 `/sdd-develop-parallels` 工作流。
 请按职责为 sub-agent 命名（例如 `api-implementer`、`test-runner`、`docs-i18n`），便于追踪归属与进度。'''
 
 sdd_plan = '''你是资深开发规划师。请根据“需求描述”先判断信息是否充分：  
@@ -588,13 +588,6 @@ profile_suffix = "（配置档：${profile}）"
 save_default_failed = "保存 Parallel Priority 偏好失败：${error}"
 save_profile_failed = "为配置档 `${profile}` 保存 Parallel Priority 失败：${error}"
 
-[app.spec.sdd_planning]
-disabled = "已关闭 SDD Planning。"
-enabled = "已开启 SDD Planning。"
-profile_suffix = "（配置档：${profile}）"
-save_default_failed = "保存 SDD Planning 偏好失败：${error}"
-save_profile_failed = "为配置档 `${profile}` 保存 SDD Planning 失败：${error}"
-
 [app.preset]
 saved = "已保存 sub-agent 预设 `${preset}`。"
 saved_with_model = "已保存 sub-agent 预设 `${preset}`，模型为 `${model}`。"
@@ -729,12 +722,6 @@ parallel_priority_off = "关闭 Parallel Priority"
 parallel_priority_off_desc = "不在模型请求中注入 Parallel Priority 规范提示词。"
 parallel_priority_on = "开启 Parallel Priority"
 parallel_priority_on_desc = "注入内置规范提示词，让代理在可行时优先组织可并行执行的工作。"
-sdd_planning_label = "SDD Planning"
-sdd_planning_label_desc = "注入用于 /spec 与 sub-agent 协作的规划指引。"
-sdd_planning_off = "关闭 SDD Planning"
-sdd_planning_off_desc = "不在模型请求中注入 SDD Planning 规范提示词。"
-sdd_planning_on = "开启 SDD Planning"
-sdd_planning_on_desc = "在模型请求中注入内置 SDD 规划提示词。"
 
 [chatwidget.preset_popup]
 title = "Sub-agent 预设"

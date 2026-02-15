@@ -49,8 +49,9 @@ sdd_planning = true
 
 - `parallel_priority = true`：在请求构建阶段动态注入内置 `Parallel Priority` 提示词。
 - `parallel_priority = false`（默认）：不注入该提示词。
-- `sdd_planning = true`：在请求构建阶段动态注入内置 `SDD Planning` 提示词（含 planning 模式建议、`/spec` 与 sub-agent 预设引导、按职责命名 sub-agent 引导）。
+- `sdd_planning = true`：在请求构建阶段动态注入内置 `SDD Planning` 提示词（用于 SDD 规划流程）。
 - `sdd_planning = false`（默认）：不注入该提示词。
+- `/sdd-develop` 与 `/sdd-develop-parallels` 在流程内会自动启用并注入 `SDD Planning` 提示词，流程收尾后恢复原设置。
 - 提示词文本由程序内置并按当前 `language` 选择中英文，不依赖 `.codex/spec/AGENTS.md` 外部文件。
 
 ## sub-agent 预设（subagent_presets）
