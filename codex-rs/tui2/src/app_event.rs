@@ -11,6 +11,7 @@
 use std::path::PathBuf;
 
 use codex_common::approval_presets::ApprovalPreset;
+use codex_core::config::types::SubagentPreset;
 use codex_core::protocol::Event;
 use codex_core::protocol::RateLimitSnapshot;
 use codex_file_search::FileMatch;
@@ -119,6 +120,21 @@ pub(crate) enum AppEvent {
     /// Update the current Parallel Priority spec toggle in the running app and widget.
     UpdateSpecParallelPriority(bool),
 
+    /// Update the current SDD Planning spec toggle in the running app and widget.
+    UpdateSpecSddPlanning(bool),
+
+    /// Update one sub-agent preset model override in the running app and widget.
+    UpdateSubagentPresetModel {
+        preset: SubagentPreset,
+        model: Option<String>,
+    },
+
+    /// Update one sub-agent preset reasoning override in the running app and widget.
+    UpdateSubagentPresetReasoningEffort {
+        preset: SubagentPreset,
+        effort: Option<ReasoningEffort>,
+    },
+
     /// Persist the selected model and reasoning effort to the appropriate config.
     PersistModelSelection {
         model: String,
@@ -133,6 +149,38 @@ pub(crate) enum AppEvent {
     /// Persist the selected Parallel Priority spec toggle to the appropriate config.
     PersistSpecParallelPriority {
         enabled: bool,
+    },
+
+    /// Persist the selected SDD Planning spec toggle to the appropriate config.
+    PersistSpecSddPlanning {
+        enabled: bool,
+    },
+
+    /// Persist one sub-agent preset model override.
+    PersistSubagentPresetModel {
+        preset: SubagentPreset,
+        model: Option<String>,
+    },
+
+    /// Persist one sub-agent preset reasoning override.
+    PersistSubagentPresetReasoningEffort {
+        preset: SubagentPreset,
+        effort: Option<ReasoningEffort>,
+    },
+
+    /// Open the second-step popup for one sub-agent preset.
+    OpenSubagentPresetActions {
+        preset: SubagentPreset,
+    },
+
+    /// Open the model picker for one sub-agent preset.
+    OpenSubagentPresetModelPicker {
+        preset: SubagentPreset,
+    },
+
+    /// Open the reasoning picker for one sub-agent preset.
+    OpenSubagentPresetReasoningPicker {
+        preset: SubagentPreset,
     },
 
     /// Persist the selected approval policy and sandbox mode to the config.

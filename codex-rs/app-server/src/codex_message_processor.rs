@@ -4703,6 +4703,8 @@ impl CodexMessageProcessor {
                     collaboration_mode,
                     personality: params.personality,
                     spec_parallel_priority: None,
+
+                    spec_sdd_planning: None,
                 })
                 .await;
         }

@@ -51,6 +51,7 @@ use codex_core::AuthManager;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::config::edit::ConfigEditsBuilder;
+use codex_core::config::types::SubagentPreset;
 #[cfg(target_os = "windows")]
 use codex_core::features::Feature;
 use codex_core::models_manager::manager::RefreshStrategy;
@@ -1765,6 +1766,62 @@ impl App {
                 self.config.spec.parallel_priority = enabled;
                 self.chat_widget.set_spec_parallel_priority(enabled);
             }
+            AppEvent::UpdateSpecSddPlanning(enabled) => {
+                self.config.spec.sdd_planning = enabled;
+                self.chat_widget.set_spec_sdd_planning(enabled);
+            }
+            AppEvent::UpdateSubagentPresetModel { preset, model } => {
+                self.chat_widget
+                    .set_subagent_preset_model(preset, model.clone());
+                match preset {
+                    SubagentPreset::Edit => {
+                        self.config.subagent_presets.edit.model = model;
+                    }
+                    SubagentPreset::Read => {
+                        self.config.subagent_presets.read.model = model;
+                    }
+                    SubagentPreset::Grep => {
+                        self.config.subagent_presets.grep.model = model;
+                    }
+                    SubagentPreset::Run => {
+                        self.config.subagent_presets.run.model = model;
+                    }
+                    SubagentPreset::Websearch => {
+                        self.config.subagent_presets.websearch.model = model;
+                    }
+                }
+            }
+            AppEvent::UpdateSubagentPresetReasoningEffort { preset, effort } => {
+                self.chat_widget
+                    .set_subagent_preset_reasoning_effort(preset, effort);
+                match preset {
+                    SubagentPreset::Edit => {
+                        self.config.subagent_presets.edit.reasoning_effort = effort;
+                    }
+                    SubagentPreset::Read => {
+                        self.config.subagent_presets.read.reasoning_effort = effort;
+                    }
+                    SubagentPreset::Grep => {
+                        self.config.subagent_presets.grep.reasoning_effort = effort;
+                    }
+                    SubagentPreset::Run => {
+                        self.config.subagent_presets.run.reasoning_effort = effort;
+                    }
+                    SubagentPreset::Websearch => {
+                        self.config.subagent_presets.websearch.reasoning_effort = effort;
+                    }
+                }
+            }
+            AppEvent::OpenSubagentPresetActions { preset } => {
+                self.chat_widget.open_subagent_preset_actions(preset);
+            }
+            AppEvent::OpenSubagentPresetModelPicker { preset } => {
+                self.chat_widget.open_subagent_preset_model_picker(preset);
+            }
+            AppEvent::OpenSubagentPresetReasoningPicker { preset } => {
+                self.chat_widget
+                    .open_subagent_preset_reasoning_picker(preset);
+            }
             AppEvent::OpenReasoningPopup { model } => {
                 self.chat_widget.open_reasoning_popup(model);
             }
@@ -1909,6 +1966,7 @@ impl App {
                                         collaboration_mode: None,
                                         personality: None,
                                         spec_parallel_priority: None,
+                                        spec_sdd_planning: None,
                                     },
                                 ));
                                 self.app_event_tx
@@ -2070,6 +2128,119 @@ impl App {
                         } else {
                             tr_args(self.config.language, key, &[("error", &err.to_string())])
                         };
+                        self.chat_widget.add_error_message(message);
+                    }
+                }
+            }
+            AppEvent::PersistSpecSddPlanning { enabled } => {
+                let profile = self.active_profile.as_deref();
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(profile)
+                    .set_spec_sdd_planning(enabled)
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {
+                        let key = if enabled {
+                            "app.spec.sdd_planning.enabled"
+                        } else {
+                            "app.spec.sdd_planning.disabled"
+                        };
+                        let mut message = tr(self.config.language, key).to_string();
+                        if let Some(profile) = profile {
+                            message.push_str(&tr_args(
+                                self.config.language,
+                                "app.spec.sdd_planning.profile_suffix",
+                                &[("profile", profile)],
+                            ));
+                        }
+                        self.chat_widget.add_info_message(message, None);
+                    }
+                    Err(err) => {
+                        tracing::error!(
+                            error = %err,
+                            "failed to persist sdd planning spec selection"
+                        );
+                        let key = if profile.is_some() {
+                            "app.spec.sdd_planning.save_profile_failed"
+                        } else {
+                            "app.spec.sdd_planning.save_default_failed"
+                        };
+                        let message = if let Some(profile) = profile {
+                            tr_args(
+                                self.config.language,
+                                key,
+                                &[("profile", profile), ("error", &err.to_string())],
+                            )
+                        } else {
+                            tr_args(self.config.language, key, &[("error", &err.to_string())])
+                        };
+                        self.chat_widget.add_error_message(message);
+                    }
+                }
+            }
+            AppEvent::PersistSubagentPresetModel { preset, model } => {
+                let preset_key = preset.as_config_key();
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .set_subagent_preset_model(preset, model.as_deref())
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {
+                        let message = if let Some(model) = model {
+                            tr_args(
+                                self.config.language,
+                                "app.preset.saved_with_model",
+                                &[("preset", preset_key), ("model", &model)],
+                            )
+                        } else {
+                            tr_args(
+                                self.config.language,
+                                "app.preset.cleared_model",
+                                &[("preset", preset_key)],
+                            )
+                        };
+                        self.chat_widget.add_info_message(message, None);
+                    }
+                    Err(err) => {
+                        tracing::error!(
+                            error = %err,
+                            "failed to persist subagent preset model"
+                        );
+                        let message = tr_args(
+                            self.config.language,
+                            "app.preset.save_failed",
+                            &[("preset", preset_key), ("error", &err.to_string())],
+                        );
+                        self.chat_widget.add_error_message(message);
+                    }
+                }
+            }
+            AppEvent::PersistSubagentPresetReasoningEffort { preset, effort } => {
+                let preset_key = preset.as_config_key();
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .set_subagent_preset_reasoning_effort(preset, effort)
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {
+                        let message = tr_args(
+                            self.config.language,
+                            "app.preset.saved",
+                            &[("preset", preset_key)],
+                        );
+                        self.chat_widget.add_info_message(message, None);
+                    }
+                    Err(err) => {
+                        tracing::error!(
+                            error = %err,
+                            "failed to persist subagent preset reasoning effort"
+                        );
+                        let message = tr_args(
+                            self.config.language,
+                            "app.preset.save_failed",
+                            &[("preset", preset_key), ("error", &err.to_string())],
+                        );
                         self.chat_widget.add_error_message(message);
                     }
                 }

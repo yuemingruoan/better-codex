@@ -1,5 +1,57 @@
 # Release Notes / 发布说明
 
+## v1.7.3 (changes since 1.7.2)
+
+### English
+
+#### Release Scope
+- Merged all updates from `develop-main` into `main` for this release window.
+- Integrated `6` commits since `v1.7.2` (`49 files changed`, `+2,035 / -180`).
+- Bumped release version to `1.7.3` across workspace and package artifacts.
+
+#### Collaboration Presets & TUI2 Workflow
+- Restored TUI2 `/collab` entry and aligned its behavior with collab experimental gating.
+- Added TUI2 `/preset` for sub-agent presets (`edit`, `read`, `grep`, `run`, `websearch`) with runtime update + config persistence.
+- Added planning-mode integration for `/sdd-develop` and `/sdd-develop-parallels`, including automatic plan/default mode transitions.
+- Updated `/spec` interaction to support tabular checkbox-style selection (`[ ]`, `Tab`, `Enter`) and expanded multi-agent guidance.
+
+#### Config, Injection & Prompt Behavior
+- Added `sub_agent_presets` and `spec.sdd_planning` config surfaces, with persistent edit APIs and schema updates.
+- Extended collab tool schema/adapter to support preset-aware sub-agent spawning while preserving existing agent types.
+- Refined spec-instruction injection scope: `parallel_priority` / `sdd_planning` prompts are injected only for user-prompt sampling requests, not follow-up tool/report loops.
+
+#### i18n, Docs & Structure
+- Added/updated bilingual (English/Chinese) prompt and UI copy for presets, SDD planning guidance, and sub-agent naming conventions.
+- Updated `docs/config.md` and `docs/slash_commands.md` for `/preset`, `/collab`, and new spec controls.
+- Removed legacy release-note file `docs/release-notes/1.6.5.md` as part of docs structure cleanup.
+
+---
+
+### 中文
+
+#### 发布范围
+- 本次发布将 `develop-main` 上的更新完整并入 `main`。
+- 纳入自 `v1.7.2` 以来 `6` 个提交（`49` 个文件变更，`+2,035 / -180`）。
+- workspace 与相关包版本统一升级至 `1.7.3`。
+
+#### 协作预设与 TUI2 工作流
+- 恢复 TUI2 `/collab` 入口，并与 collab experimental 门禁保持一致。
+- 新增 TUI2 `/preset`，支持子 Agent 预设（`edit`、`read`、`grep`、`run`、`websearch`）的运行时调整与配置持久化。
+- 为 `/sdd-develop` 与 `/sdd-develop-parallels` 增加 planning 阶段模式切换，自动在 plan/default 模式间转换。
+- 更新 `/spec` 交互为表格式复选选择（`[ ]`、`Tab`、`Enter`），并扩展多 Agent 指导文案。
+
+#### 配置、注入与提示词行为
+- 增加 `sub_agent_presets` 与 `spec.sdd_planning` 配置能力，并补齐持久化编辑 API 与 schema。
+- 扩展 collab 工具 schema/adapter，支持按 preset 生成子 Agent 参数，同时保持既有 agent type 不变。
+- 收敛规范注入范围：`parallel_priority` / `sdd_planning` 提示词仅在用户提示请求时注入，不再在工具 follow-up/汇报循环中重复附加。
+
+#### i18n、文档与结构
+- 新增/更新中英文提示词与 UI 文案，覆盖预设说明、SDD planning 规范、按职责命名子 Agent 指引。
+- 更新 `docs/config.md` 与 `docs/slash_commands.md`，补充 `/preset`、`/collab` 与新 spec 开关说明。
+- 清理遗留发布说明文件 `docs/release-notes/1.6.5.md`，完成文档结构收口。
+
+---
+
 ## v1.7.2 (changes since 1.7.1)
 
 ### English
@@ -129,93 +181,3 @@
 - 持续遵循 fork 发布策略：保留关键工作流并维护中英文双语发布说明。
 
 ---
-
-## v1.7.1 (changes since 1.7.0)
-
-### English
-
-#### Collaboration & Multi-Agent Orchestration
-- Added batch and registry-style collab tools:
-  - `list_agents`
-  - `wait_agents` (supports `any|all`, default-target behavior, timeout aggregation)
-  - `close_agents`
-- Extended `spawn_agent` with orchestration metadata:
-  - `label`, `acceptance_criteria`, `test_commands`, `allow_nested_agents`
-- Added model/control overrides in `spawn_agent`:
-  - `model`, `reasoning_effort`, `reasoning_summary`
-- Added permission overrides in `spawn_agent`:
-  - `approval_policy`, `sandbox_mode`
-- Added policy and governance controls:
-  - `max_active_subagents_per_thread`
-  - `max_spawn_depth`
-  - `default_wait_timeout_ms`
-  - `auto_close_on_parent_shutdown`
-  - `allow_subagent_permission_escalation`
-- Added agent registry metadata and lifecycle synchronization (`creator`, goal, acceptance criteria, test commands, status, closed flag).
-- Fixed sub-agent quota slot leak after close/shutdown.
-- Increased default collaboration limits:
-  - `max_active_subagents_per_thread`: `8 -> 30`
-  - `agents.max_threads`: `6 -> 30`
-
-#### TUI / TUI2 and i18n
-- Added collab lifecycle rendering in chat UI (spawn / interaction / wait / close begin/end).
-- Added localized status labels for collab state (pending/running/completed/errored/timed out/shutdown/not found).
-- Introduced SDD parallel workflow command support (`/sdd-develop-parallels`) with dedicated plan/execute/merge prompts.
-- Synced related prompt and slash-command behavior across both `tui` and `tui2`.
-
-#### Stability & Correctness
-- Fixed premature turn completion when output stream only contains assistant commentary (now treated as preamble, not final answer).
-- Stabilized core regression coverage around pending input and tool-flow behavior.
-- Kept CLI `exec` base-instructions override authoritative in config merge flow.
-
-#### Release Engineering
-- Restored release-critical workflows:
-  - `.github/workflows/release.yml`
-  - `.github/workflows/build-platform-binaries.yml`
-- Bumped workspace and package versions to `1.7.1`.
-- Added explicit release process guidance to `AGENTS.md`.
-
----
-
-### 中文
-
-#### 协作与多 Agent 编排
-- 新增批量与注册表视角的协作工具：
-  - `list_agents`
-  - `wait_agents`（支持 `any|all`、默认目标集合与超时聚合）
-  - `close_agents`
-- 扩展 `spawn_agent` 编排元数据：
-  - `label`、`acceptance_criteria`、`test_commands`、`allow_nested_agents`
-- 新增 `spawn_agent` 模型/思考控制参数：
-  - `model`、`reasoning_effort`、`reasoning_summary`
-- 新增 `spawn_agent` 权限控制参数：
-  - `approval_policy`、`sandbox_mode`
-- 新增治理配置与约束：
-  - `max_active_subagents_per_thread`
-  - `max_spawn_depth`
-  - `default_wait_timeout_ms`
-  - `auto_close_on_parent_shutdown`
-  - `allow_subagent_permission_escalation`
-- 新增子 Agent 注册信息与生命周期同步（创建者、目标、验收标准、测试命令、状态、关闭标记）。
-- 修复子 Agent 关闭后配额槽位未释放问题。
-- 提升默认协作并发上限：
-  - `max_active_subagents_per_thread`: `8 -> 30`
-  - `agents.max_threads`: `6 -> 30`
-
-#### TUI / TUI2 与 i18n
-- 在聊天界面新增协作生命周期渲染（spawn / interaction / wait / close 的开始与结束事件）。
-- 新增协作状态本地化文案（初始化中、运行中、已完成、出错、超时、已关闭、未找到）。
-- 引入 SDD 并行开发指令支持（`/sdd-develop-parallels`），并提供配套 plan/execute/merge 提示词。
-- 在 `tui` 与 `tui2` 之间同步相关提示词与斜杠命令行为。
-
-#### 稳定性与正确性
-- 修复“仅 commentary 输出被误判为最终完成”的提前结束问题（现改为前置说明，不作为最终答复）。
-- 补强 core 回归测试，稳定 pending input 与工具链路行为。
-- 修复 CLI `exec` 模式下 base instructions 覆盖在配置合并中的优先级稳定性。
-
-#### 发布工程
-- 恢复发布关键工作流：
-  - `.github/workflows/release.yml`
-  - `.github/workflows/build-platform-binaries.yml`
-- workspace 与相关包版本升级至 `1.7.1`。
-- 在 `AGENTS.md` 中补充常规发布流程说明。

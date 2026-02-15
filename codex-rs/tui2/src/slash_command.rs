@@ -17,6 +17,7 @@ pub enum SlashCommand {
     Model,
     Lang,
     Spec,
+    Preset,
     Approvals,
     #[strum(serialize = "setup-elevated-sandbox")]
     ElevateSandbox,
@@ -27,6 +28,7 @@ pub enum SlashCommand {
     Fork,
     Init,
     Compact,
+    Collab,
     // Undo,
     Diff,
     Clean,
@@ -69,6 +71,8 @@ impl SlashCommand {
             SlashCommand::Model => tr(language, "slash_command.description.model"),
             SlashCommand::Lang => tr(language, "slash_command.description.lang"),
             SlashCommand::Spec => tr(language, "slash_command.description.spec"),
+            SlashCommand::Preset => tr(language, "slash_command.description.preset"),
+            SlashCommand::Collab => tr(language, "slash_command.description.collab"),
             SlashCommand::Approvals => tr(language, "slash_command.description.approvals"),
             SlashCommand::ElevateSandbox => {
                 tr(language, "slash_command.description.elevate_sandbox")
@@ -99,6 +103,7 @@ impl SlashCommand {
             | SlashCommand::Model
             | SlashCommand::Lang
             | SlashCommand::Spec
+            | SlashCommand::Preset
             | SlashCommand::Approvals
             | SlashCommand::ElevateSandbox
             | SlashCommand::Review
@@ -110,6 +115,7 @@ impl SlashCommand {
             | SlashCommand::Status
             | SlashCommand::Mcp
             | SlashCommand::Feedback
+            | SlashCommand::Collab
             | SlashCommand::Quit
             | SlashCommand::Exit => true,
             SlashCommand::Rollout => true,
@@ -139,12 +145,22 @@ mod tests {
     use super::built_in_slash_commands;
 
     #[test]
-    fn spec_command_is_available() {
+    fn spec_collab_and_preset_commands_are_available() {
         let commands = built_in_slash_commands();
         assert!(
             commands
                 .iter()
                 .any(|(name, command)| *name == "spec" && *command == SlashCommand::Spec)
+        );
+        assert!(
+            commands
+                .iter()
+                .any(|(name, command)| *name == "collab" && *command == SlashCommand::Collab)
+        );
+        assert!(
+            commands
+                .iter()
+                .any(|(name, command)| *name == "preset" && *command == SlashCommand::Preset)
         );
     }
 }

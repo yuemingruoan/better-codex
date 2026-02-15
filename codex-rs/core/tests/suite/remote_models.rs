@@ -211,6 +211,8 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
             collaboration_mode: None,
             personality: None,
             spec_parallel_priority: None,
+
+            spec_sdd_planning: None,
         })
         .await?;
 
@@ -444,6 +446,8 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
             collaboration_mode: None,
             personality: None,
             spec_parallel_priority: None,
+
+            spec_sdd_planning: None,
         })
         .await?;
 

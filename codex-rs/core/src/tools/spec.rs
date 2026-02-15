@@ -522,6 +522,15 @@ fn create_spawn_agent_parameters() -> JsonSchema {
         },
     );
     properties.insert(
+        "preset".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Optional spawn preset (edit|read|grep|run|websearch) / 可选启动预设（edit|read|grep|run|websearch）"
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
         "acceptance_criteria".to_string(),
         JsonSchema::Array {
             items: Box::new(JsonSchema::String {
@@ -1049,6 +1058,15 @@ fn create_claude_task_alias_tool() -> ToolSpec {
             "model".to_string(),
             JsonSchema::String {
                 description: Some("Optional model override / 可选模型覆盖".to_string()),
+            },
+        ),
+        (
+            "preset".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Optional spawn preset forwarded to spawn_agent / 可选 spawn 预设（透传至 spawn_agent）"
+                        .to_string(),
+                ),
             },
         ),
         (
@@ -2948,6 +2966,7 @@ mod tests {
             "items",
             "agent_type",
             "name",
+            "preset",
             "acceptance_criteria",
             "test_commands",
             "allow_nested_agents",
@@ -3057,6 +3076,7 @@ mod tests {
         assert_eq!(params_additional_properties, &Some(false.into()));
         assert!(params_properties.contains_key("items"));
         assert!(params_properties.contains_key("name"));
+        assert!(params_properties.contains_key("preset"));
         assert!(!params_properties.contains_key("label"));
     }
 
@@ -3153,6 +3173,7 @@ mod tests {
             "subagent_type",
             "name",
             "model",
+            "preset",
             "max_turns",
             "mode",
             "resume",

@@ -18,6 +18,7 @@ use crate::config::types::ShellEnvironmentPolicy;
 use crate::config::types::ShellEnvironmentPolicyToml;
 use crate::config::types::SkillsConfig;
 use crate::config::types::SpecConfig;
+use crate::config::types::SubagentPresetsConfig;
 use crate::config::types::Tui;
 use crate::config::types::UriBasedFileOpener;
 use crate::config_loader::CloudRequirementsLoader;
@@ -204,6 +205,9 @@ pub struct Config {
 
     /// Built-in spec toggles that affect request-time instruction injection.
     pub spec: SpecConfig,
+
+    /// Built-in sub-agent preset overrides for model and reasoning effort.
+    pub subagent_presets: SubagentPresetsConfig,
 
     /// Preferred UI language.
     pub language: Language,
@@ -1042,6 +1046,10 @@ pub struct ConfigToml {
     #[serde(default)]
     pub spec: Option<SpecConfig>,
 
+    /// Built-in sub-agent preset overrides for model and reasoning effort.
+    #[serde(default)]
+    pub subagent_presets: Option<SubagentPresetsConfig>,
+
     /// User-level skill config entries keyed by SKILL.md path.
     pub skills: Option<SkillsConfig>,
 
@@ -1789,6 +1797,7 @@ impl Config {
             notify: cfg.notify,
             user_instructions,
             spec: cfg.spec.unwrap_or_default(),
+            subagent_presets: cfg.subagent_presets.unwrap_or_default(),
             language: cfg.language.unwrap_or_default(),
             base_instructions,
             personality,
@@ -4111,6 +4120,7 @@ model_verbosity = "high"
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 user_instructions: None,
                 spec: SpecConfig::default(),
+                subagent_presets: SubagentPresetsConfig::default(),
                 notify: None,
                 cwd: fixture.cwd(),
                 cli_auth_credentials_store_mode: Default::default(),
@@ -4225,6 +4235,7 @@ model_verbosity = "high"
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             spec: SpecConfig::default(),
+            subagent_presets: SubagentPresetsConfig::default(),
             notify: None,
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
@@ -4337,6 +4348,7 @@ model_verbosity = "high"
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             spec: SpecConfig::default(),
+            subagent_presets: SubagentPresetsConfig::default(),
             notify: None,
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
@@ -4435,6 +4447,7 @@ model_verbosity = "high"
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             spec: SpecConfig::default(),
+            subagent_presets: SubagentPresetsConfig::default(),
             notify: None,
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),

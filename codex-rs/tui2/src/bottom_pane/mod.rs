@@ -95,6 +95,7 @@ use codex_protocol::custom_prompts::CustomPrompt;
 
 use crate::status_indicator_widget::StatusIndicatorWidget;
 pub(crate) use list_selection_view::SelectionAction;
+pub(crate) use list_selection_view::SelectionInteractionMode;
 pub(crate) use list_selection_view::SelectionItem;
 
 #[derive(Clone, Debug, PartialEq)]

@@ -2,6 +2,7 @@ use crate::agent::AgentStatus;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::config::Config;
+use crate::config::types::SubagentPreset;
 use crate::error::CodexErr;
 use crate::function_tool::FunctionCallError;
 use crate::models_manager::manager::RefreshStrategy;
@@ -42,6 +43,7 @@ pub struct CollabHandler;
 pub(crate) const MIN_WAIT_TIMEOUT_MS: i64 = 100;
 pub(crate) const DEFAULT_WAIT_TIMEOUT_MS: i64 = crate::config::DEFAULT_COLLAB_WAIT_TIMEOUT_MS;
 pub(crate) const MAX_WAIT_TIMEOUT_MS: i64 = 300_000;
+const ALLOWED_SPAWN_PRESETS: [&str; 5] = ["edit", "read", "grep", "run", "websearch"];
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -59,6 +61,7 @@ struct CloseAgentArgs {
 
 #[derive(Debug, Default)]
 struct SpawnConfigOverrides {
+    preset: Option<SubagentPreset>,
     model: Option<String>,
     reasoning_effort: Option<ReasoningEffort>,
     reasoning_summary: Option<ReasoningSummaryConfig>,
@@ -130,6 +133,7 @@ mod spawn {
         acceptance_criteria: Option<Vec<String>>,
         test_commands: Option<Vec<String>>,
         allow_nested_agents: Option<bool>,
+        preset: Option<String>,
         model: Option<String>,
         reasoning_effort: Option<ReasoningEffort>,
         reasoning_summary: Option<ReasoningSummaryConfig>,
@@ -155,6 +159,7 @@ mod spawn {
                     .to_string(),
             ));
         }
+        let preset = parse_spawn_preset(args.preset.as_deref())?;
         let agent_role = args.agent_type.unwrap_or(AgentRole::Default);
         let input_items = parse_collab_input(args.items)?;
         let prompt = input_preview(&input_items);
@@ -183,6 +188,7 @@ mod spawn {
             )
             .await;
         let overrides = SpawnConfigOverrides {
+            preset,
             model: args.model,
             reasoning_effort: args.reasoning_effort,
             reasoning_summary: args.reasoning_summary,
@@ -1545,13 +1551,44 @@ fn input_preview(items: &[UserInput]) -> String {
     parts.join("\n")
 }
 
+fn parse_spawn_preset(preset: Option<&str>) -> Result<Option<SubagentPreset>, FunctionCallError> {
+    let Some(preset) = preset.map(str::trim).filter(|preset| !preset.is_empty()) else {
+        return Ok(None);
+    };
+    let parsed = match preset {
+        "edit" => SubagentPreset::Edit,
+        "read" => SubagentPreset::Read,
+        "grep" => SubagentPreset::Grep,
+        "run" => SubagentPreset::Run,
+        "websearch" => SubagentPreset::Websearch,
+        _ => {
+            let allowed = ALLOWED_SPAWN_PRESETS.join("|");
+            return Err(FunctionCallError::RespondToModel(format!(
+                "unsupported preset `{preset}`; expected one of {allowed} / 不支持的 preset `{preset}`，可选值：{allowed}"
+            )));
+        }
+    };
+    Ok(Some(parsed))
+}
+
 async fn apply_spawn_model_overrides(
     session: &Session,
     turn: &TurnContext,
     config: &mut Config,
     overrides: &SpawnConfigOverrides,
 ) -> Result<(), FunctionCallError> {
-    if let Some(model) = overrides.model.as_deref() {
+    let preset_config = overrides.preset.map(|preset| match preset {
+        SubagentPreset::Edit => &turn.config.subagent_presets.edit,
+        SubagentPreset::Read => &turn.config.subagent_presets.read,
+        SubagentPreset::Grep => &turn.config.subagent_presets.grep,
+        SubagentPreset::Run => &turn.config.subagent_presets.run,
+        SubagentPreset::Websearch => &turn.config.subagent_presets.websearch,
+    });
+    if let Some(model) = overrides
+        .model
+        .as_deref()
+        .or_else(|| preset_config.and_then(|preset| preset.model.as_deref()))
+    {
         let model = model.trim();
         if model.is_empty() {
             return Err(FunctionCallError::RespondToModel(
@@ -1562,7 +1599,10 @@ async fn apply_spawn_model_overrides(
         config.model = Some(model.to_string());
     }
 
-    if let Some(reasoning_effort) = overrides.reasoning_effort {
+    if let Some(reasoning_effort) = overrides
+        .reasoning_effort
+        .or_else(|| preset_config.and_then(|preset| preset.reasoning_effort))
+    {
         config.model_reasoning_effort = Some(reasoning_effort);
     }
     if let Some(reasoning_summary) = overrides.reasoning_summary {
@@ -1922,6 +1962,29 @@ mod tests {
             err,
             FunctionCallError::RespondToModel(
                 "model not-a-real-model is not available".to_string()
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn spawn_agent_rejects_unknown_preset() {
+        let (session, turn) = make_session_and_context().await;
+        let invocation = invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "items": [{"type": "text", "text": "hello"}],
+                "preset": "not-a-real-preset"
+            })),
+        );
+        let Err(err) = CollabHandler.handle(invocation).await else {
+            panic!("unknown preset should be rejected");
+        };
+        assert_eq!(
+            err,
+            FunctionCallError::RespondToModel(
+                "unsupported preset `not-a-real-preset`; expected one of edit|read|grep|run|websearch / 不支持的 preset `not-a-real-preset`，可选值：edit|read|grep|run|websearch".to_string()
             )
         );
     }
@@ -3822,6 +3885,7 @@ mod tests {
             .unwrap_or(ReasoningEffort::Medium);
 
         let overrides = SpawnConfigOverrides {
+            preset: None,
             model: Some(model.clone()),
             reasoning_effort: Some(effort),
             reasoning_summary: Some(ReasoningSummaryConfig::Detailed),
@@ -3841,11 +3905,117 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn build_agent_spawn_config_uses_model_override_precedence() {
+        let (session, mut turn) = make_session_and_context().await;
+        let default_model = turn.model_info.slug.clone();
+        let preset_model = session
+            .services
+            .models_manager
+            .list_models(turn.config.as_ref(), RefreshStrategy::Offline)
+            .await
+            .into_iter()
+            .map(|preset| preset.model)
+            .find(|candidate| candidate != &default_model)
+            .expect("expected a model alternative to the default model");
+
+        overwrite_turn_config(&mut turn, |config| {
+            config.subagent_presets.edit.model = Some(preset_model.clone());
+        });
+        let preset_only_overrides = SpawnConfigOverrides {
+            preset: Some(SubagentPreset::Edit),
+            ..SpawnConfigOverrides::default()
+        };
+        let preset_only_config = build_agent_spawn_config(&session, &turn, &preset_only_overrides)
+            .await
+            .expect("preset-only config");
+        assert_eq!(preset_only_config.model, Some(preset_model));
+
+        overwrite_turn_config(&mut turn, |config| {
+            config.subagent_presets.edit.model = Some("not-a-real-model".to_string());
+        });
+        let explicit_overrides = SpawnConfigOverrides {
+            preset: Some(SubagentPreset::Edit),
+            model: Some(default_model.clone()),
+            ..SpawnConfigOverrides::default()
+        };
+        let explicit_config = build_agent_spawn_config(&session, &turn, &explicit_overrides)
+            .await
+            .expect("explicit model should override preset model");
+        assert_eq!(explicit_config.model, Some(default_model));
+    }
+
+    #[tokio::test]
+    async fn build_agent_spawn_config_uses_reasoning_effort_override_precedence() {
+        let (session, mut turn) = make_session_and_context().await;
+        turn.reasoning_effort = None;
+
+        let model = turn.model_info.slug.clone();
+        let model_info = session
+            .services
+            .models_manager
+            .get_model_info(&model, turn.config.as_ref())
+            .await;
+        let supported_effort = model_info
+            .supported_reasoning_levels
+            .first()
+            .map(|preset| preset.effort)
+            .expect("expected at least one supported reasoning effort");
+        let unsupported_effort = [
+            ReasoningEffort::None,
+            ReasoningEffort::Minimal,
+            ReasoningEffort::Low,
+            ReasoningEffort::Medium,
+            ReasoningEffort::High,
+            ReasoningEffort::XHigh,
+        ]
+        .into_iter()
+        .find(|effort| {
+            !model_info
+                .supported_reasoning_levels
+                .iter()
+                .any(|preset| preset.effort == *effort)
+        })
+        .expect("expected at least one unsupported effort for the default model");
+
+        overwrite_turn_config(&mut turn, |config| {
+            config.subagent_presets.edit.reasoning_effort = Some(supported_effort);
+        });
+        let preset_only_overrides = SpawnConfigOverrides {
+            preset: Some(SubagentPreset::Edit),
+            ..SpawnConfigOverrides::default()
+        };
+        let preset_only_config = build_agent_spawn_config(&session, &turn, &preset_only_overrides)
+            .await
+            .expect("preset-only config");
+        assert_eq!(
+            preset_only_config.model_reasoning_effort,
+            Some(supported_effort)
+        );
+
+        overwrite_turn_config(&mut turn, |config| {
+            config.subagent_presets.edit.reasoning_effort = Some(unsupported_effort);
+        });
+        let explicit_overrides = SpawnConfigOverrides {
+            preset: Some(SubagentPreset::Edit),
+            reasoning_effort: Some(supported_effort),
+            ..SpawnConfigOverrides::default()
+        };
+        let explicit_config = build_agent_spawn_config(&session, &turn, &explicit_overrides)
+            .await
+            .expect("explicit reasoning_effort should override preset reasoning_effort");
+        assert_eq!(
+            explicit_config.model_reasoning_effort,
+            Some(supported_effort)
+        );
+    }
+
+    #[tokio::test]
     async fn build_agent_spawn_config_allows_permission_downscope() {
         let (session, mut turn) = make_session_and_context().await;
         turn.approval_policy = AskForApproval::OnFailure;
         turn.sandbox_policy = SandboxPolicy::DangerFullAccess;
         let overrides = SpawnConfigOverrides {
+            preset: None,
             model: None,
             reasoning_effort: None,
             reasoning_summary: None,
@@ -3865,6 +4035,7 @@ mod tests {
         let (session, mut turn) = make_session_and_context().await;
         turn.approval_policy = AskForApproval::Never;
         let overrides = SpawnConfigOverrides {
+            preset: None,
             model: None,
             reasoning_effort: None,
             reasoning_summary: None,
@@ -3887,6 +4058,7 @@ mod tests {
         let (session, mut turn) = make_session_and_context().await;
         turn.sandbox_policy = SandboxPolicy::ReadOnly;
         let overrides = SpawnConfigOverrides {
+            preset: None,
             model: None,
             reasoning_effort: None,
             reasoning_summary: None,
@@ -3913,6 +4085,7 @@ mod tests {
             config.allow_subagent_permission_escalation = true;
         });
         let overrides = SpawnConfigOverrides {
+            preset: None,
             model: None,
             reasoning_effort: None,
             reasoning_summary: None,

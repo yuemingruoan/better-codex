@@ -398,3 +398,21 @@
 
 - 当前待办：
   - 无。
+
+## 2026-02-15 11:00:10 CST
+- 完成本轮 SDD 收尾：`/collab` 恢复、sub-agent 预设（`edit/read/grep/run/websearch`）、`/preset`、`spec.sdd_planning` 注入、`/spec` 表格复选交互（`Tab` 勾选/取消、`Enter` 保存）、`/sdd-develop*` 规划态 Plan mode 切换均已落地并通过回归。
+- 已执行并通过：`just write-config-schema`、`cargo test -p codex-tui2`、`cargo insta pending-snapshots`（无 pending）、`cargo test -p codex-core`、`just fmt`、`just fix -p codex-core`、`just fix -p codex-tui2`、`cargo build -p codex-cli --release`。
+- `cargo test -p codex-core` 首轮因缺少 `test_stdio_server` 失败；补齐 `cargo build -p codex-rmcp-client --bin test_stdio_server` 后复跑全量通过（含 `tests/all.rs` 与 `responses_headers.rs`）。
+- 已将 `.codex/task.md` 对应 T1-T20 全部勾选为完成，作为本轮执行看板收口记录。
+
+- 当前待办：
+  - 无。
+
+## 2026-02-15 11:14:00 CST
+- 已完成并行子任务成果主线集成：`sdd/sub-agent-edit-read-grep-run-we` 已通过本地 `--no-ff` 合并到 `develop-main`，合并提交 `fc6218d4`。
+- 合并前后无代码漂移：`git diff --name-only 690415b6 fc6218d4` 为空；沿用已完成验证结论（`just write-config-schema`、`cargo test -p codex-core`、`cargo test -p codex-tui2`、`cargo insta pending-snapshots`、`just fmt`、`just fix -p codex-core`、`just fix -p codex-tui2`、`cargo build -p codex-cli --release`）。
+- 冲突处理结论：无文本冲突（`ort` 自动合并）；测试阻塞曾来自 `test_stdio_server` 缺失，已通过 `cargo build -p codex-rmcp-client --bin test_stdio_server` 解决并复验通过。
+- 清理执行：无临时 worktree；尝试删除本地特性分支被策略拦截（命令被 policy 拒绝），已记录为后续手工清理项。
+
+- 当前待办：
+  - 手工删除本地分支 `sdd/sub-agent-edit-read-grep-run-we`（当前会话策略拦截自动删除）。

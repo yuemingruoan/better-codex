@@ -385,6 +385,7 @@ impl Codex {
             developer_instructions: config.developer_instructions.clone(),
             user_instructions,
             spec_parallel_priority: config.spec.parallel_priority,
+            spec_sdd_planning: config.spec.sdd_planning,
             personality: config.personality,
             base_instructions,
             compact_prompt: config.compact_prompt.clone(),
@@ -632,6 +633,9 @@ pub(crate) struct SessionConfiguration {
     /// Whether to inject the built-in "Parallel Priority" spec guidance.
     spec_parallel_priority: bool,
 
+    /// Whether to inject the built-in "SDD Planning" spec guidance.
+    spec_sdd_planning: bool,
+
     /// Personality preference for the model.
     personality: Option<Personality>,
 
@@ -711,6 +715,9 @@ impl SessionConfiguration {
         if let Some(spec_parallel_priority) = updates.spec_parallel_priority {
             next_configuration.spec_parallel_priority = spec_parallel_priority;
         }
+        if let Some(spec_sdd_planning) = updates.spec_sdd_planning {
+            next_configuration.spec_sdd_planning = spec_sdd_planning;
+        }
         Ok(next_configuration)
     }
 }
@@ -726,6 +733,7 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) final_output_json_schema: Option<Option<Value>>,
     pub(crate) personality: Option<Personality>,
     pub(crate) spec_parallel_priority: Option<bool>,
+    pub(crate) spec_sdd_planning: Option<bool>,
 }
 
 impl Session {
@@ -766,6 +774,7 @@ impl Session {
         per_turn_config.model_reasoning_summary = session_configuration.model_reasoning_summary;
         per_turn_config.personality = session_configuration.personality;
         per_turn_config.spec.parallel_priority = session_configuration.spec_parallel_priority;
+        per_turn_config.spec.sdd_planning = session_configuration.spec_sdd_planning;
         let resolved_web_search_mode = resolve_web_search_mode_for_turn(
             &per_turn_config.web_search_mode,
             session_configuration.sandbox_policy.get(),
@@ -2860,6 +2869,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 collaboration_mode,
                 personality,
                 spec_parallel_priority,
+                spec_sdd_planning,
             } => {
                 let collaboration_mode = if let Some(collab_mode) = collaboration_mode {
                     collab_mode
@@ -2883,6 +2893,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                         reasoning_summary: summary,
                         personality,
                         spec_parallel_priority,
+                        spec_sdd_planning,
                         ..Default::default()
                     },
                 )
@@ -3111,6 +3122,7 @@ mod handlers {
                         final_output_json_schema: Some(final_output_json_schema),
                         personality,
                         spec_parallel_priority: None,
+                        spec_sdd_planning: None,
                     },
                 )
             }
@@ -4266,8 +4278,17 @@ async fn run_sampling_request(
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
     let mut input = input;
-    if let Some(item) = spec_parallel_priority_instruction_item(turn_context.as_ref()) {
-        input.push(item);
+    let should_inject_spec_instruction_items = matches!(
+        input.last().and_then(parse_turn_item),
+        Some(TurnItem::UserMessage(_))
+    );
+    if should_inject_spec_instruction_items {
+        if let Some(item) = spec_parallel_priority_instruction_item(turn_context.as_ref()) {
+            input.push(item);
+        }
+        if let Some(item) = spec_sdd_planning_instruction_item(turn_context.as_ref()) {
+            input.push(item);
+        }
     }
     let router = built_tools(
         sess.as_ref(),
@@ -4382,6 +4403,16 @@ fn spec_parallel_priority_instruction_item(turn_context: &TurnContext) -> Option
         "prompt.spec.parallel_priority",
     )
     .to_string();
+    let directory = turn_context.cwd.to_string_lossy().into_owned();
+    Some(UserInstructions { directory, text }.into())
+}
+
+fn spec_sdd_planning_instruction_item(turn_context: &TurnContext) -> Option<ResponseItem> {
+    if !turn_context.config.spec.sdd_planning {
+        return None;
+    }
+
+    let text = tr(turn_context.config.language, "prompt.spec.sdd_planning").to_string();
     let directory = turn_context.cwd.to_string_lossy().into_owned();
     Some(UserInstructions { directory, text }.into())
 }
@@ -5878,6 +5909,7 @@ mod tests {
             developer_instructions: config.developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
             spec_parallel_priority: config.spec.parallel_priority,
+            spec_sdd_planning: config.spec.sdd_planning,
             personality: config.personality,
             base_instructions: config
                 .base_instructions
@@ -5962,6 +5994,7 @@ mod tests {
             developer_instructions: config.developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
             spec_parallel_priority: config.spec.parallel_priority,
+            spec_sdd_planning: config.spec.sdd_planning,
             personality: config.personality,
             base_instructions: config
                 .base_instructions
@@ -6227,6 +6260,7 @@ mod tests {
             developer_instructions: config.developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
             spec_parallel_priority: config.spec.parallel_priority,
+            spec_sdd_planning: config.spec.sdd_planning,
             personality: config.personality,
             base_instructions: config
                 .base_instructions
@@ -6279,6 +6313,7 @@ mod tests {
             developer_instructions: config.developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
             spec_parallel_priority: config.spec.parallel_priority,
+            spec_sdd_planning: config.spec.sdd_planning,
             personality: config.personality,
             base_instructions: config
                 .base_instructions
@@ -6416,6 +6451,7 @@ mod tests {
             developer_instructions: config.developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
             spec_parallel_priority: config.spec.parallel_priority,
+            spec_sdd_planning: config.spec.sdd_planning,
             personality: config.personality,
             base_instructions: config
                 .base_instructions

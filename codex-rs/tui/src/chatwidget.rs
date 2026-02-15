@@ -4699,6 +4699,8 @@ impl ChatWidget {
                 collaboration_mode: None,
                 personality: None,
                 spec_parallel_priority: None,
+
+                spec_sdd_planning: None,
             }));
             tx.send(AppEvent::UpdateModel(switch_model.clone()));
             tx.send(AppEvent::UpdateReasoningEffort(Some(default_effort)));
@@ -4820,6 +4822,8 @@ impl ChatWidget {
                         windows_sandbox_level: None,
                         personality: Some(personality),
                         spec_parallel_priority: None,
+
+                        spec_sdd_planning: None,
                     }));
                     tx.send(AppEvent::UpdatePersonality(personality));
                     tx.send(AppEvent::PersistPersonalitySelection { personality });
@@ -5090,6 +5094,8 @@ impl ChatWidget {
                 collaboration_mode: None,
                 personality: None,
                 spec_parallel_priority: None,
+
+                spec_sdd_planning: None,
             }));
             tx.send(AppEvent::UpdateModel(model_for_action.clone()));
             tx.send(AppEvent::UpdateReasoningEffort(effort_for_action));
@@ -5265,6 +5271,8 @@ impl ChatWidget {
                 collaboration_mode: None,
                 personality: None,
                 spec_parallel_priority: None,
+
+                spec_sdd_planning: None,
             }));
         self.app_event_tx.send(AppEvent::UpdateModel(model.clone()));
         self.app_event_tx
@@ -5451,6 +5459,8 @@ impl ChatWidget {
                 collaboration_mode: None,
                 personality: None,
                 spec_parallel_priority: None,
+
+                spec_sdd_planning: None,
             }));
             tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
             tx.send(AppEvent::UpdateSandboxPolicy(sandbox_clone));

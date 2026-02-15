@@ -36,6 +36,8 @@ async fn override_turn_context_does_not_persist_when_config_exists() {
             collaboration_mode: None,
             personality: None,
             spec_parallel_priority: None,
+
+            spec_sdd_planning: None,
         })
         .await
         .expect("submit override");
@@ -73,6 +75,8 @@ async fn override_turn_context_does_not_create_config_file() {
             collaboration_mode: None,
             personality: None,
             spec_parallel_priority: None,
+
+            spec_sdd_planning: None,
         })
         .await
         .expect("submit override");
