@@ -196,6 +196,10 @@ pub enum Op {
         /// Updated built-in spec toggle for "Parallel Priority" request guidance.
         #[serde(skip_serializing_if = "Option::is_none")]
         spec_parallel_priority: Option<bool>,
+
+        /// Updated built-in spec toggle for "SDD Planning" request guidance.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        spec_sdd_planning: Option<bool>,
     },
 
     /// Approve a command execution

@@ -8,6 +8,7 @@ pub use codex_protocol::config_types::AltScreenMode;
 pub use codex_protocol::config_types::ModeKind;
 pub use codex_protocol::config_types::Personality;
 pub use codex_protocol::config_types::WebSearchMode;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -571,6 +572,57 @@ pub struct SpecConfig {
     /// When enabled, inject the "Parallel Priority" guidance into model requests.
     #[serde(default)]
     pub parallel_priority: bool,
+
+    /// When enabled, inject the SDD planning guidance into model requests.
+    #[serde(default)]
+    pub sdd_planning: bool,
+}
+
+/// Fixed built-in sub-agent preset names.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SubagentPreset {
+    Edit,
+    Read,
+    Grep,
+    Run,
+    Websearch,
+}
+
+impl SubagentPreset {
+    pub const fn as_config_key(self) -> &'static str {
+        match self {
+            SubagentPreset::Edit => "edit",
+            SubagentPreset::Read => "read",
+            SubagentPreset::Grep => "grep",
+            SubagentPreset::Run => "run",
+            SubagentPreset::Websearch => "websearch",
+        }
+    }
+}
+
+/// Model overrides for one built-in sub-agent preset.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct SubagentPresetConfig {
+    pub model: Option<String>,
+    pub reasoning_effort: Option<ReasoningEffort>,
+}
+
+/// Per-preset model overrides for built-in sub-agent presets.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct SubagentPresetsConfig {
+    #[serde(default)]
+    pub edit: SubagentPresetConfig,
+    #[serde(default)]
+    pub read: SubagentPresetConfig,
+    #[serde(default)]
+    pub grep: SubagentPresetConfig,
+    #[serde(default)]
+    pub run: SubagentPresetConfig,
+    #[serde(default)]
+    pub websearch: SubagentPresetConfig,
 }
 
 /// Settings for notices we display to users via the tui and app-server clients

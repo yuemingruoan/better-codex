@@ -6,5 +6,5 @@ expression: terminal.backend()
 "› /res                                                      "
 "                                                            "
 "  /resume                 resume a saved chat               "
-"  /sdd-develop-parallels  start the parallel SDD workflow   "
-"                          (main agent + sub agents)         "
+"  /preset                 configure built-in sub-agent      "
+"                          presets                           "

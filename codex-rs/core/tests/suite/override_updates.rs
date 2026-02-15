@@ -124,6 +124,8 @@ async fn override_turn_context_without_user_turn_does_not_record_permissions_upd
             collaboration_mode: None,
             personality: None,
             spec_parallel_priority: None,
+
+            spec_sdd_planning: None,
         })
         .await?;
 
@@ -165,6 +167,8 @@ async fn override_turn_context_without_user_turn_does_not_record_environment_upd
             collaboration_mode: None,
             personality: None,
             spec_parallel_priority: None,
+
+            spec_sdd_planning: None,
         })
         .await?;
 
@@ -203,6 +207,8 @@ async fn override_turn_context_without_user_turn_does_not_record_collaboration_u
             collaboration_mode: Some(collaboration_mode),
             personality: None,
             spec_parallel_priority: None,
+
+            spec_sdd_planning: None,
         })
         .await?;
 

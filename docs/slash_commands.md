@@ -7,6 +7,9 @@ https://developers.openai.com/codex/cli/slash-commands
 
 ## 本仓库新增命令
 
-- `/spec`：打开规范配置弹窗（当前仅 `Parallel Priority`）。
-- 开启 `Parallel Priority` 后，Codex 会在每次请求时动态注入内置提示词（按当前语言选择中/英文）。
-- 关闭后，后续请求不再携带该提示词；不会创建 `.codex/spec/AGENTS.md` 等外部文件。
+- `/preset`：打开 sub-agent 预设配置交互，按预设（`edit` / `read` / `grep` / `run` / `websearch`）设置模型与推理强度覆盖，并保存到配置。
+- `/collab`（tui2）：打开协作模式选择弹窗，切换当前会话的协作预设。
+- `/spec`：打开规范配置弹窗，支持 `Parallel Priority` 与 `SDD Planning` 开关。
+- `/spec` 交互提示：按 `Tab` 切换复选项，按 `Enter` 保存。
+- 开启后，Codex 会在每次请求时动态注入对应内置提示词（按当前语言选择中/英文）；关闭后后续请求不再携带。
+- 以上配置均不会创建 `.codex/spec/AGENTS.md` 等外部文件。

@@ -50,6 +50,7 @@ struct TaskArgs {
     max_turns: Option<u32>,
     mode: Option<String>,
     model: Option<String>,
+    preset: Option<String>,
     name: Option<String>,
     resume: Option<String>,
     run_in_background: Option<bool>,
@@ -236,6 +237,7 @@ fn map_task_to_spawn_payload(args: TaskArgs) -> Result<JsonValue, FunctionCallEr
         max_turns,
         mode,
         model,
+        preset,
         name,
         resume,
         run_in_background,
@@ -268,6 +270,9 @@ fn map_task_to_spawn_payload(args: TaskArgs) -> Result<JsonValue, FunctionCallEr
 
     if let Some(model) = normalize_text(model.as_deref()) {
         payload.insert("model".to_string(), JsonValue::String(model));
+    }
+    if let Some(preset) = normalize_text(preset.as_deref()) {
+        payload.insert("preset".to_string(), JsonValue::String(preset));
     }
 
     Ok(JsonValue::Object(payload))
@@ -928,6 +933,7 @@ mod tests {
             max_turns: None,
             mode: None,
             model: Some("gpt-5.1-codex-mini".to_string()),
+            preset: Some("run".to_string()),
             name: None,
             resume: None,
             run_in_background: None,
@@ -942,6 +948,7 @@ mod tests {
                 "agent_type": "explorer",
                 "name": "Investigate failing test",
                 "model": "gpt-5.1-codex-mini",
+                "preset": "run",
             })
         );
     }

@@ -35,6 +35,7 @@ statusline = "配置状态栏显示项"
 personality = "自定义 Codex 的交流风格"
 plan = "切换到计划模式"
 collab = "选择协作模式"
+preset = "配置内置 sub-agent 预设"
 agent = "选择代理"
 logout = "注销 Codex 登录"
 
@@ -165,6 +166,12 @@ init = '''请生成一个名为 AGENTS.md 的文件，为本仓库贡献者提�
 spec.parallel_priority = '''本会话已启用 Parallel Priority。
 
 在规划与执行任务时，优先识别并组织可并行推进的独立工作。将任务拆分为最小可验证增量，避免不必要的串行阻塞；涉及共享状态时，明确标注依赖与同步点。'''
+
+spec.sdd_planning = '''本会话已启用 SDD Planning。
+
+当任务多步骤或需求仍不明确时，先切换到 planning 模式并确认里程碑后再执行。
+使用 `/spec` 时，请检查并配置 sub-agent presets，为不同职责匹配合适模型与推理强度。
+请按职责为 sub-agent 命名（例如 `api-implementer`、`test-runner`、`docs-i18n`），便于追踪归属与进度。'''
 
 sdd_plan = '''你是资深开发规划师。请根据“需求描述”先判断信息是否充分：  
 - 在向用户提问前，**必须先阅读项目内相关代码/文档**以澄清上下文；仅当代码中无法确认或存在多个合理语义时才提问。  
@@ -581,6 +588,19 @@ profile_suffix = "（配置档：${profile}）"
 save_default_failed = "保存 Parallel Priority 偏好失败：${error}"
 save_profile_failed = "为配置档 `${profile}` 保存 Parallel Priority 失败：${error}"
 
+[app.spec.sdd_planning]
+disabled = "已关闭 SDD Planning。"
+enabled = "已开启 SDD Planning。"
+profile_suffix = "（配置档：${profile}）"
+save_default_failed = "保存 SDD Planning 偏好失败：${error}"
+save_profile_failed = "为配置档 `${profile}` 保存 SDD Planning 失败：${error}"
+
+[app.preset]
+saved = "已保存 sub-agent 预设 `${preset}`。"
+saved_with_model = "已保存 sub-agent 预设 `${preset}`，模型为 `${model}`。"
+cleared_model = "已清除 sub-agent 预设 `${preset}` 的模型覆盖。"
+save_failed = "保存 sub-agent 预设 `${preset}` 失败：${error}"
+
 [app.model_migration]
 save_pref_failed = "保存模型迁移提示偏好失败：${error}"
 
@@ -661,6 +681,12 @@ waiting_end = "等待 `${receiver_id}` 结束，状态为 `${status}`。"
 close_begin = "正在关闭 `${receiver_id}`。"
 close_end = "`${receiver_id}` 关闭结束，状态为 `${status}`。"
 
+[chatwidget.collab_popup]
+title = "选择协作模式"
+subtitle = "为当前会话选择协作预设。"
+action_apply = "应用模式"
+hint = "按 Enter 应用，按 Esc 取消。"
+
 [chatwidget.clean]
 deleted = "已清理剪贴板图片缓存：删除 ${deleted} 个文件。"
 deleted_with_failures = "已清理剪贴板图片缓存：删除 ${deleted} 个文件，${failed} 个失败。"
@@ -694,12 +720,42 @@ english_desc = "界面与提示使用英语"
 title = "选择语言"
 
 [chatwidget.spec_popup]
+title = "规范设置"
+subtitle = "这些设置会直接随请求携带，不会创建 .codex/spec 文件。"
+checkbox_hint = "按 Tab 切换选项，按 Enter 保存。"
+parallel_priority_label = "Parallel Priority"
+parallel_priority_label_desc = "优先组织可并行推进的独立工作。"
 parallel_priority_off = "关闭 Parallel Priority"
 parallel_priority_off_desc = "不在模型请求中注入 Parallel Priority 规范提示词。"
 parallel_priority_on = "开启 Parallel Priority"
 parallel_priority_on_desc = "注入内置规范提示词，让代理在可行时优先组织可并行执行的工作。"
-subtitle = "该设置会直接随请求携带，不会创建 .codex/spec 文件。"
-title = "规范：Parallel Priority"
+sdd_planning_label = "SDD Planning"
+sdd_planning_label_desc = "注入用于 /spec 与 sub-agent 协作的规划指引。"
+sdd_planning_off = "关闭 SDD Planning"
+sdd_planning_off_desc = "不在模型请求中注入 SDD Planning 规范提示词。"
+sdd_planning_on = "开启 SDD Planning"
+sdd_planning_on_desc = "在模型请求中注入内置 SDD 规划提示词。"
+
+[chatwidget.preset_popup]
+title = "Sub-agent 预设"
+subtitle = "为内置 sub-agent 预设配置模型与推理覆盖。"
+preset_edit = "edit"
+preset_read = "read"
+preset_grep = "grep"
+preset_run = "run"
+preset_websearch = "websearch"
+actions_subtitle = "预设：${preset}"
+model_subtitle = "为 ${preset} 选择模型"
+reasoning_subtitle = "为 ${preset} 选择推理强度"
+action_set_model = "设置模型覆盖"
+action_set_reasoning = "设置推理覆盖"
+action_clear_model = "清除模型覆盖"
+action_clear_reasoning = "清除推理覆盖"
+current_model_desc = "当前模型：${model}"
+current_reasoning_desc = "当前推理：${reasoning}"
+action_save = "保存预设"
+action_clear = "清除覆盖"
+hint = "按 Tab 切换字段，按 Enter 保存。"
 
 [chatwidget.mcp]
 starting_server_single = "正在启动 MCP 服务器：${server}"

@@ -44,11 +44,32 @@ language = "en"
 ```toml
 [spec]
 parallel_priority = true
+sdd_planning = true
 ```
 
 - `parallel_priority = true`：在请求构建阶段动态注入内置 `Parallel Priority` 提示词。
 - `parallel_priority = false`（默认）：不注入该提示词。
+- `sdd_planning = true`：在请求构建阶段动态注入内置 `SDD Planning` 提示词（含 planning 模式建议、`/spec` 与 sub-agent 预设引导、按职责命名 sub-agent 引导）。
+- `sdd_planning = false`（默认）：不注入该提示词。
 - 提示词文本由程序内置并按当前 `language` 选择中英文，不依赖 `.codex/spec/AGENTS.md` 外部文件。
+
+## sub-agent 预设（subagent_presets）
+
+可在 `~/.codex/config.toml` 中覆盖内置 sub-agent 预设（`edit` / `read` / `grep` / `run` / `websearch`）的模型与推理强度：
+
+```toml
+[subagent_presets.edit]
+model = "gpt-5.1-codex"
+reasoning_effort = "medium"
+
+[subagent_presets.read]
+model = "gpt-5.1"
+reasoning_effort = "low"
+```
+
+- `model`：可选，覆盖该预设默认模型。
+- `reasoning_effort`：可选，覆盖该预设默认推理强度。
+- 不配置时使用内置默认值。
 
 ## JSON Schema
 
