@@ -36,6 +36,7 @@ statusline = "configure which items appear in the status line"
 personality = "customize how Codex communicates"
 plan = "switch to plan mode"
 collab = "choose a collaboration mode"
+preset = "configure built-in sub-agent presets"
 agent = "select an agent"
 
 [status_line_setup]
@@ -168,6 +169,12 @@ Commit & Pull Request Guidelines
 spec.parallel_priority = '''Parallel Priority is enabled for this session.
 
 When planning and executing work, prefer independent tasks that can run concurrently. Split work into minimal verifiable increments, avoid unnecessary sequential blocking, and keep shared-state edits explicit and coordinated.'''
+
+spec.sdd_planning = '''SDD Planning is enabled for this session.
+
+For multi-step or uncertain work, switch to planning mode first and confirm milestones before execution.
+When using `/spec`, review and configure sub-agent presets so each responsibility gets the right model and reasoning effort.
+Name each sub-agent by responsibility (for example: `api-implementer`, `test-runner`, `docs-i18n`) to keep ownership and progress tracking clear.'''
 
 sdd_plan = '''You are a senior development planner. Based on the "Requirement description", first determine whether the information is sufficient:
 - Before asking the user, **you must read relevant project code/docs** to clarify context; only ask when the code cannot confirm it or there are multiple plausible interpretations.
@@ -585,6 +592,19 @@ profile_suffix = " for ${profile} profile"
 save_default_failed = "Failed to save Parallel Priority preference: ${error}"
 save_profile_failed = "Failed to save Parallel Priority for profile `${profile}`: ${error}"
 
+[app.spec.sdd_planning]
+disabled = "SDD Planning disabled."
+enabled = "SDD Planning enabled."
+profile_suffix = " for ${profile} profile"
+save_default_failed = "Failed to save SDD Planning preference: ${error}"
+save_profile_failed = "Failed to save SDD Planning for profile `${profile}`: ${error}"
+
+[app.preset]
+saved = "Saved sub-agent preset `${preset}`."
+saved_with_model = "Saved sub-agent preset `${preset}` with model `${model}`."
+cleared_model = "Cleared model override for sub-agent preset `${preset}`."
+save_failed = "Failed to save sub-agent preset `${preset}`: ${error}"
+
 [app.model_migration]
 save_pref_failed = "Failed to save model migration prompt preference: ${error}"
 
@@ -665,6 +685,12 @@ waiting_end = "Wait for `${receiver_id}` finished with status `${status}`."
 close_begin = "Closing `${receiver_id}`."
 close_end = "Close for `${receiver_id}` finished with status `${status}`."
 
+[chatwidget.collab_popup]
+title = "Select Collaboration Mode"
+subtitle = "Pick a collaboration preset for this session."
+action_apply = "Apply mode"
+hint = "Press Enter to apply, Esc to cancel."
+
 [chatwidget.clean]
 deleted = "Clipboard image cache cleaned: deleted ${deleted} file(s)."
 deleted_with_failures = "Clipboard image cache cleaned: deleted ${deleted} file(s), ${failed} failed."
@@ -698,12 +724,42 @@ english_desc = "Use English for UI and prompts"
 title = "Select language"
 
 [chatwidget.spec_popup]
+title = "Spec Settings"
+subtitle = "These settings are embedded in requests and do not create .codex/spec files."
+checkbox_hint = "Press Tab to toggle, Enter to save."
+parallel_priority_label = "Parallel Priority"
+parallel_priority_label_desc = "Prioritize independent work that can run in parallel."
 parallel_priority_off = "Disable Parallel Priority"
 parallel_priority_off_desc = "Do not inject the Parallel Priority guidance into model requests."
 parallel_priority_on = "Enable Parallel Priority"
 parallel_priority_on_desc = "Inject built-in guidance so the agent prefers parallelizable work when possible."
-subtitle = "This setting is embedded in requests and does not create .codex/spec files."
-title = "Spec: Parallel Priority"
+sdd_planning_label = "SDD Planning"
+sdd_planning_label_desc = "Inject planning guidance for /spec and sub-agent coordination."
+sdd_planning_off = "Disable SDD Planning"
+sdd_planning_off_desc = "Do not inject the SDD Planning guidance into model requests."
+sdd_planning_on = "Enable SDD Planning"
+sdd_planning_on_desc = "Inject built-in SDD planning guidance into model requests."
+
+[chatwidget.preset_popup]
+title = "Sub-agent Presets"
+subtitle = "Configure model and reasoning overrides for built-in sub-agent presets."
+preset_edit = "edit"
+preset_read = "read"
+preset_grep = "grep"
+preset_run = "run"
+preset_websearch = "websearch"
+actions_subtitle = "Preset: ${preset}"
+model_subtitle = "Select model for ${preset}"
+reasoning_subtitle = "Select reasoning effort for ${preset}"
+action_set_model = "Set model override"
+action_set_reasoning = "Set reasoning override"
+action_clear_model = "Clear model override"
+action_clear_reasoning = "Clear reasoning override"
+current_model_desc = "Current model: ${model}"
+current_reasoning_desc = "Current reasoning: ${reasoning}"
+action_save = "Save preset"
+action_clear = "Clear override"
+hint = "Press Tab to switch fields, Enter to save."
 
 [chatwidget.mcp]
 starting_server_single = "Booting MCP server: ${server}"

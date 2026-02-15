@@ -1514,13 +1514,15 @@ async fn slash_spec_selection_enables_parallel_priority() {
     chat.config.spec.parallel_priority = false;
 
     chat.dispatch_command(SlashCommand::Spec);
-    chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
     assert_matches!(
         rx.try_recv(),
         Ok(AppEvent::CodexOp(Op::OverrideTurnContext {
             spec_parallel_priority: Some(true),
+
+            spec_sdd_planning: None,
             ..
         }))
     );
@@ -1540,13 +1542,15 @@ async fn slash_spec_selection_disables_parallel_priority() {
     chat.config.spec.parallel_priority = true;
 
     chat.dispatch_command(SlashCommand::Spec);
-    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
     assert_matches!(
         rx.try_recv(),
         Ok(AppEvent::CodexOp(Op::OverrideTurnContext {
             spec_parallel_priority: Some(false),
+
+            spec_sdd_planning: None,
             ..
         }))
     );
@@ -1557,6 +1561,55 @@ async fn slash_spec_selection_disables_parallel_priority() {
     assert_matches!(
         rx.try_recv(),
         Ok(AppEvent::PersistSpecParallelPriority { enabled: false })
+    );
+}
+
+#[tokio::test]
+async fn slash_spec_selection_enables_sdd_planning() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.spec.sdd_planning = false;
+
+    chat.dispatch_command(SlashCommand::Spec);
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::CodexOp(Op::OverrideTurnContext {
+            spec_parallel_priority: None,
+            spec_sdd_planning: Some(true),
+            ..
+        }))
+    );
+    assert_matches!(rx.try_recv(), Ok(AppEvent::UpdateSpecSddPlanning(true)));
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::PersistSpecSddPlanning { enabled: true })
+    );
+}
+
+#[tokio::test]
+async fn slash_spec_selection_disables_sdd_planning() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.spec.sdd_planning = true;
+
+    chat.dispatch_command(SlashCommand::Spec);
+    chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::CodexOp(Op::OverrideTurnContext {
+            spec_parallel_priority: None,
+            spec_sdd_planning: Some(false),
+            ..
+        }))
+    );
+    assert_matches!(rx.try_recv(), Ok(AppEvent::UpdateSpecSddPlanning(false)));
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::PersistSpecSddPlanning { enabled: false })
     );
 }
 

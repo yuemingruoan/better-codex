@@ -720,6 +720,8 @@ async fn parallel_priority_spec_injected_when_enabled_and_removed_after_override
             collaboration_mode: None,
             personality: None,
             spec_parallel_priority: Some(false),
+
+            spec_sdd_planning: None,
         })
         .await
         .expect("override spec toggle");
@@ -756,6 +758,203 @@ async fn parallel_priority_spec_injected_when_enabled_and_removed_after_override
     assert!(
         !second_has_spec,
         "second request should not include Parallel Priority spec after disabling"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sdd_planning_spec_injected_when_enabled_and_removed_after_override() {
+    skip_if_no_network!();
+    let server = MockServer::start().await;
+
+    let resp_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+            sse(vec![ev_response_created("resp2"), ev_completed("resp2")]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::from_api_key("Test API Key"))
+        .with_config(|config| {
+            config.spec.sdd_planning = true;
+        });
+    let codex = builder
+        .build(&server)
+        .await
+        .expect("create new conversation")
+        .codex;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            collaboration_mode: None,
+            personality: None,
+            spec_parallel_priority: None,
+            spec_sdd_planning: Some(false),
+        })
+        .await
+        .expect("override spec toggle");
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello again".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = resp_mock.requests();
+    assert_eq!(requests.len(), 2);
+
+    let spec_text = tr(Language::En, "prompt.spec.sdd_planning");
+    let first_has_spec = requests[0]
+        .message_input_texts("user")
+        .iter()
+        .any(|text| text.contains(spec_text));
+    let second_has_spec = requests[1]
+        .message_input_texts("user")
+        .iter()
+        .any(|text| text.contains(spec_text));
+
+    assert!(
+        first_has_spec,
+        "first request should include SDD Planning spec"
+    );
+    assert!(
+        !second_has_spec,
+        "second request should not include SDD Planning spec after disabling"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sdd_planning_override_keeps_parallel_priority_injection() {
+    skip_if_no_network!();
+    let server = MockServer::start().await;
+
+    let resp_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+            sse(vec![ev_response_created("resp2"), ev_completed("resp2")]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::from_api_key("Test API Key"))
+        .with_config(|config| {
+            config.spec.parallel_priority = true;
+            config.spec.sdd_planning = true;
+        });
+    let codex = builder
+        .build(&server)
+        .await
+        .expect("create new conversation")
+        .codex;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            collaboration_mode: None,
+            personality: None,
+            spec_parallel_priority: None,
+            spec_sdd_planning: Some(false),
+        })
+        .await
+        .expect("override spec toggle");
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello again".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = resp_mock.requests();
+    assert_eq!(requests.len(), 2);
+
+    let parallel_spec_text = tr(Language::En, "prompt.spec.parallel_priority");
+    let sdd_spec_text = tr(Language::En, "prompt.spec.sdd_planning");
+
+    let first_has_parallel_spec = requests[0]
+        .message_input_texts("user")
+        .iter()
+        .any(|text| text.contains(parallel_spec_text));
+    let first_has_sdd_spec = requests[0]
+        .message_input_texts("user")
+        .iter()
+        .any(|text| text.contains(sdd_spec_text));
+    let second_has_parallel_spec = requests[1]
+        .message_input_texts("user")
+        .iter()
+        .any(|text| text.contains(parallel_spec_text));
+    let second_has_sdd_spec = requests[1]
+        .message_input_texts("user")
+        .iter()
+        .any(|text| text.contains(sdd_spec_text));
+
+    assert!(
+        first_has_parallel_spec,
+        "first request should include Parallel Priority spec"
+    );
+    assert!(
+        first_has_sdd_spec,
+        "first request should include SDD Planning spec"
+    );
+    assert!(
+        second_has_parallel_spec,
+        "second request should still include Parallel Priority spec"
+    );
+    assert!(
+        !second_has_sdd_spec,
+        "second request should not include SDD Planning spec after disabling"
     );
 }
 

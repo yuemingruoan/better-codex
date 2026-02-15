@@ -1041,6 +1041,86 @@
           "default": false,
           "description": "When enabled, inject the \"Parallel Priority\" guidance into model requests.",
           "type": "boolean"
+        },
+        "sdd_planning": {
+          "default": false,
+          "description": "When enabled, inject the SDD planning guidance into model requests.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "SubagentPresetConfig": {
+      "additionalProperties": false,
+      "description": "Model overrides for one built-in sub-agent preset.",
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "reasoning_effort": {
+          "$ref": "#/definitions/ReasoningEffort"
+        }
+      },
+      "type": "object"
+    },
+    "SubagentPresetsConfig": {
+      "additionalProperties": false,
+      "description": "Per-preset model overrides for built-in sub-agent presets.",
+      "properties": {
+        "edit": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/SubagentPresetConfig"
+            }
+          ],
+          "default": {
+            "model": null,
+            "reasoning_effort": null
+          }
+        },
+        "grep": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/SubagentPresetConfig"
+            }
+          ],
+          "default": {
+            "model": null,
+            "reasoning_effort": null
+          }
+        },
+        "read": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/SubagentPresetConfig"
+            }
+          ],
+          "default": {
+            "model": null,
+            "reasoning_effort": null
+          }
+        },
+        "run": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/SubagentPresetConfig"
+            }
+          ],
+          "default": {
+            "model": null,
+            "reasoning_effort": null
+          }
+        },
+        "websearch": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/SubagentPresetConfig"
+            }
+          ],
+          "default": {
+            "model": null,
+            "reasoning_effort": null
+          }
         }
       },
       "type": "object"
@@ -1668,6 +1748,15 @@
       ],
       "default": null,
       "description": "Built-in spec toggles for request-time instruction injection."
+    },
+    "subagent_presets": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/SubagentPresetsConfig"
+        }
+      ],
+      "default": null,
+      "description": "Built-in sub-agent preset overrides for model and reasoning effort."
     },
     "suppress_unstable_features_warning": {
       "description": "Suppress warnings about unstable (under development) features.",

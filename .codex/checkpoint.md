@@ -398,3 +398,12 @@
 
 - 当前待办：
   - 无。
+
+## 2026-02-15 11:00:10 CST
+- 完成本轮 SDD 收尾：`/collab` 恢复、sub-agent 预设（`edit/read/grep/run/websearch`）、`/preset`、`spec.sdd_planning` 注入、`/spec` 表格复选交互（`Tab` 勾选/取消、`Enter` 保存）、`/sdd-develop*` 规划态 Plan mode 切换均已落地并通过回归。
+- 已执行并通过：`just write-config-schema`、`cargo test -p codex-tui2`、`cargo insta pending-snapshots`（无 pending）、`cargo test -p codex-core`、`just fmt`、`just fix -p codex-core`、`just fix -p codex-tui2`、`cargo build -p codex-cli --release`。
+- `cargo test -p codex-core` 首轮因缺少 `test_stdio_server` 失败；补齐 `cargo build -p codex-rmcp-client --bin test_stdio_server` 后复跑全量通过（含 `tests/all.rs` 与 `responses_headers.rs`）。
+- 已将 `.codex/task.md` 对应 T1-T20 全部勾选为完成，作为本轮执行看板收口记录。
+
+- 当前待办：
+  - 无。

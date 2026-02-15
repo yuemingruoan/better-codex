@@ -1,6 +1,7 @@
 use crate::config::CONFIG_TOML_FILE;
 use crate::config::types::McpServerConfig;
 use crate::config::types::Notice;
+use crate::config::types::SubagentPreset;
 use crate::path_utils::resolve_symlink_write_paths;
 use crate::path_utils::write_atomically;
 use crate::protocol::AskForApproval;
@@ -785,6 +786,56 @@ impl ConfigEditsBuilder {
         self
     }
 
+    pub fn set_spec_sdd_planning(mut self, enabled: bool) -> Self {
+        self.edits.push(ConfigEdit::SetPath {
+            segments: vec!["spec".to_string(), "sdd_planning".to_string()],
+            value: value(enabled),
+        });
+        self
+    }
+
+    pub fn set_subagent_preset_model(
+        mut self,
+        preset: SubagentPreset,
+        model: Option<&str>,
+    ) -> Self {
+        let segments = vec![
+            "subagent_presets".to_string(),
+            preset.as_config_key().to_string(),
+            "model".to_string(),
+        ];
+        if let Some(model) = model {
+            self.edits.push(ConfigEdit::SetPath {
+                segments,
+                value: value(model),
+            });
+        } else {
+            self.edits.push(ConfigEdit::ClearPath { segments });
+        }
+        self
+    }
+
+    pub fn set_subagent_preset_reasoning_effort(
+        mut self,
+        preset: SubagentPreset,
+        effort: Option<ReasoningEffort>,
+    ) -> Self {
+        let segments = vec![
+            "subagent_presets".to_string(),
+            preset.as_config_key().to_string(),
+            "reasoning_effort".to_string(),
+        ];
+        if let Some(effort) = effort {
+            self.edits.push(ConfigEdit::SetPath {
+                segments,
+                value: value(effort.to_string()),
+            });
+        } else {
+            self.edits.push(ConfigEdit::ClearPath { segments });
+        }
+        self
+    }
+
     pub fn set_personality(mut self, personality: Option<Personality>) -> Self {
         self.edits
             .push(ConfigEdit::SetModelPersonality { personality });
@@ -1002,6 +1053,58 @@ model_reasoning_effort = "high"
             .and_then(|table| table.get("parallel_priority"))
             .and_then(TomlValue::as_bool);
         assert_eq!(enabled, Some(true));
+    }
+
+    #[test]
+    fn blocking_set_spec_sdd_planning_nested() {
+        let tmp = tempdir().expect("tmpdir");
+        let codex_home = tmp.path();
+
+        ConfigEditsBuilder::new(codex_home)
+            .set_spec_sdd_planning(true)
+            .apply_blocking()
+            .expect("persist");
+
+        let raw = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+        let value: TomlValue = toml::from_str(&raw).expect("parse config");
+        let enabled = value
+            .get("spec")
+            .and_then(TomlValue::as_table)
+            .and_then(|table| table.get("sdd_planning"))
+            .and_then(TomlValue::as_bool);
+        assert_eq!(enabled, Some(true));
+    }
+
+    #[test]
+    fn blocking_set_subagent_preset_fields() {
+        let tmp = tempdir().expect("tmpdir");
+        let codex_home = tmp.path();
+
+        ConfigEditsBuilder::new(codex_home)
+            .set_subagent_preset_model(SubagentPreset::Edit, Some("gpt-5.1-codex"))
+            .set_subagent_preset_reasoning_effort(
+                SubagentPreset::Edit,
+                Some(ReasoningEffort::Medium),
+            )
+            .apply_blocking()
+            .expect("persist");
+
+        let raw = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+        let value: TomlValue = toml::from_str(&raw).expect("parse config");
+        let preset = value
+            .get("subagent_presets")
+            .and_then(TomlValue::as_table)
+            .and_then(|table| table.get("edit"))
+            .and_then(TomlValue::as_table)
+            .expect("subagent_presets.edit table");
+        assert_eq!(
+            preset.get("model").and_then(TomlValue::as_str),
+            Some("gpt-5.1-codex")
+        );
+        assert_eq!(
+            preset.get("reasoning_effort").and_then(TomlValue::as_str),
+            Some("medium")
+        );
     }
 
     #[test]

@@ -34,6 +34,13 @@ use unicode_width::UnicodeWidthStr;
 /// One selectable item in the generic selection list.
 pub(crate) type SelectionAction = Box<dyn Fn(&AppEventSender) + Send + Sync>;
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum SelectionInteractionMode {
+    #[default]
+    SingleSelect,
+    MultiSelect,
+}
+
 #[derive(Default)]
 pub(crate) struct SelectionItem {
     pub name: String,
@@ -57,6 +64,7 @@ pub(crate) struct SelectionViewParams {
     pub search_placeholder: Option<String>,
     pub header: Box<dyn Renderable>,
     pub initial_selected_idx: Option<usize>,
+    pub interaction_mode: SelectionInteractionMode,
 }
 
 impl Default for SelectionViewParams {
@@ -71,6 +79,7 @@ impl Default for SelectionViewParams {
             search_placeholder: None,
             header: Box::new(()),
             initial_selected_idx: None,
+            interaction_mode: SelectionInteractionMode::SingleSelect,
         }
     }
 }
@@ -89,6 +98,9 @@ pub(crate) struct ListSelectionView {
     last_selected_actual_idx: Option<usize>,
     header: Box<dyn Renderable>,
     initial_selected_idx: Option<usize>,
+    interaction_mode: SelectionInteractionMode,
+    checked_state: Vec<bool>,
+    initial_checked_state: Vec<bool>,
 }
 
 impl ListSelectionView {
@@ -121,7 +133,14 @@ impl ListSelectionView {
             last_selected_actual_idx: None,
             header,
             initial_selected_idx: params.initial_selected_idx,
+            interaction_mode: params.interaction_mode,
+            checked_state: Vec::new(),
+            initial_checked_state: Vec::new(),
         };
+        if s.is_multi_select_mode() {
+            s.checked_state = s.items.iter().map(|item| item.is_current).collect();
+            s.initial_checked_state = s.checked_state.clone();
+        }
         s.apply_filter();
         s
     }
@@ -202,7 +221,18 @@ impl ListSelectionView {
                     };
                     let name_with_marker = format!("{name}{marker}");
                     let n = visible_idx + 1;
-                    let wrap_prefix = if self.is_searchable {
+                    let wrap_prefix = if self.is_multi_select_mode() {
+                        let checkbox = if self.item_checked(*actual_idx) {
+                            "[x]"
+                        } else {
+                            "[ ]"
+                        };
+                        if self.is_searchable {
+                            format!("{prefix} {checkbox} ")
+                        } else {
+                            format!("{prefix} {checkbox} {n}. ")
+                        }
+                    } else if self.is_searchable {
                         // The number keys don't work when search is enabled (since we let the
                         // numbers be used for the search query).
                         format!("{prefix} ")
@@ -243,6 +273,14 @@ impl ListSelectionView {
     }
 
     fn accept(&mut self) {
+        if self.is_multi_select_mode() {
+            self.accept_multi_select();
+            return;
+        }
+        self.accept_single_select();
+    }
+
+    fn accept_single_select(&mut self) {
         if let Some(idx) = self.state.selected_idx
             && let Some(actual_idx) = self.filtered_indices.get(idx)
             && let Some(item) = self.items.get(*actual_idx)
@@ -257,6 +295,47 @@ impl ListSelectionView {
         } else {
             self.complete = true;
         }
+    }
+
+    fn accept_multi_select(&mut self) {
+        for (idx, item) in self.items.iter().enumerate() {
+            let initial = self
+                .initial_checked_state
+                .get(idx)
+                .copied()
+                .unwrap_or(false);
+            let checked = self.item_checked(idx);
+            if checked != initial {
+                for act in &item.actions {
+                    act(&self.app_event_tx);
+                }
+            }
+        }
+        self.complete = true;
+    }
+
+    fn toggle_selected_checkbox(&mut self) {
+        if !self.is_multi_select_mode() {
+            return;
+        }
+        if let Some(idx) = self.state.selected_idx
+            && let Some(actual_idx) = self.filtered_indices.get(idx).copied()
+            && let Some(checked) = self.checked_state.get_mut(actual_idx)
+        {
+            *checked = !*checked;
+        }
+    }
+
+    fn item_checked(&self, idx: usize) -> bool {
+        if self.is_multi_select_mode() {
+            self.checked_state.get(idx).copied().unwrap_or(false)
+        } else {
+            self.items.get(idx).is_some_and(|item| item.is_current)
+        }
+    }
+
+    fn is_multi_select_mode(&self) -> bool {
+        self.interaction_mode == SelectionInteractionMode::MultiSelect
     }
 
     #[cfg(test)]
@@ -330,6 +409,11 @@ impl BottomPaneView for ListSelectionView {
                 self.on_ctrl_c();
             }
             KeyEvent {
+                code: KeyCode::Tab,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } if self.is_multi_select_mode() => self.toggle_selected_checkbox(),
+            KeyEvent {
                 code: KeyCode::Char(c),
                 modifiers,
                 ..
@@ -345,6 +429,7 @@ impl BottomPaneView for ListSelectionView {
                 modifiers,
                 ..
             } if !self.is_searchable
+                && !self.is_multi_select_mode()
                 && !modifiers.contains(KeyModifiers::CONTROL)
                 && !modifiers.contains(KeyModifiers::ALT) =>
             {
@@ -535,6 +620,9 @@ mod tests {
     use crate::app_event::AppEvent;
     use crate::bottom_pane::popup_consts::standard_popup_hint_line;
     use codex_protocol::config_types::Language;
+    use crossterm::event::KeyCode;
+    use crossterm::event::KeyEvent;
+    use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
     use ratatui::layout::Rect;
     use tokio::sync::mpsc::unbounded_channel;
@@ -870,5 +958,97 @@ mod tests {
             "list_selection_narrow_width_preserves_rows",
             render_lines_with_width(&view, 24)
         );
+    }
+
+    fn make_multi_select_view() -> (
+        ListSelectionView,
+        tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+    ) {
+        let (tx_raw, rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let items = vec![
+            SelectionItem {
+                name: "Read Only".to_string(),
+                is_current: true,
+                actions: vec![Box::new(|tx| tx.send(AppEvent::OpenSddPlanOptions))],
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Full Access".to_string(),
+                is_current: false,
+                actions: vec![Box::new(|tx| tx.send(AppEvent::SddPlanApproved))],
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Third Option".to_string(),
+                is_current: false,
+                actions: vec![Box::new(|tx| tx.send(AppEvent::SddDevAbandonBranch))],
+                ..Default::default()
+            },
+        ];
+        let view = ListSelectionView::new(
+            SelectionViewParams {
+                title: Some("Select options".to_string()),
+                items,
+                interaction_mode: SelectionInteractionMode::MultiSelect,
+                ..Default::default()
+            },
+            tx,
+        );
+        (view, rx)
+    }
+
+    #[test]
+    fn renders_checkboxes_in_multi_select_mode() {
+        let (view, _rx) = make_multi_select_view();
+        let lines = render_lines(&view);
+        assert!(lines.contains("[x] 1. Read Only"));
+        assert!(lines.contains("[ ] 2. Full Access"));
+    }
+
+    #[test]
+    fn tab_toggles_checked_state_for_highlighted_row() {
+        let (mut view, _rx) = make_multi_select_view();
+        view.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        let lines = render_lines(&view);
+        assert!(lines.contains("[ ] 1. Read Only"));
+        view.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        view.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        let lines = render_lines(&view);
+        assert!(lines.contains("[x] 2. Full Access"));
+    }
+
+    #[test]
+    fn enter_applies_deferred_actions_from_checked_state_diff() {
+        let (mut view, mut rx) = make_multi_select_view();
+        view.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        view.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        view.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+
+        assert!(rx.try_recv().is_err());
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert!(view.is_complete());
+
+        let mut open_plan_options = false;
+        let mut approved = false;
+        let mut event_count = 0;
+        while let Ok(event) = rx.try_recv() {
+            event_count += 1;
+            match event {
+                AppEvent::OpenSddPlanOptions => {
+                    open_plan_options = true;
+                }
+                AppEvent::SddPlanApproved => {
+                    approved = true;
+                }
+                _ => panic!("unexpected event from deferred multi-select apply"),
+            }
+        }
+
+        assert!(open_plan_options);
+        assert!(approved);
+        assert_eq!(event_count, 2);
     }
 }

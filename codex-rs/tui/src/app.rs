@@ -1863,6 +1863,8 @@ impl App {
                                         collaboration_mode: None,
                                         personality: None,
                                         spec_parallel_priority: None,
+
+                                        spec_sdd_planning: None,
                                     },
                                 ));
                                 self.app_event_tx.send(
@@ -1886,6 +1888,8 @@ impl App {
                                         collaboration_mode: None,
                                         personality: None,
                                         spec_parallel_priority: None,
+
+                                        spec_sdd_planning: None,
                                     },
                                 ));
                                 self.app_event_tx
@@ -2150,6 +2154,8 @@ impl App {
                                 collaboration_mode: None,
                                 personality: None,
                                 spec_parallel_priority: None,
+
+                                spec_sdd_planning: None,
                             }));
                     }
                 }
