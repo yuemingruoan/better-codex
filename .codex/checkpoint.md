@@ -443,3 +443,10 @@
 - 主集成验证：`cd codex-rs && just fmt`（通过）
 - 主集成验证：`cd codex-rs && cargo test -p codex-cli`（通过）
 - 残留风险：当前 macOS 环境交叉 `--target x86_64-pc-windows-msvc` 仍报 target/core 解析异常，`T5` 待 Windows 实机复验
+
+## 2026-02-16 合并收尾阶段
+- 已将 `sdd/windows-tui2-bug` 通过本地 `--no-ff` 合并到 `develop-main`，生成合并提交：`12646347`（`ort`，无冲突）。
+- 合并后再次验证：`cd codex-rs && just fmt`、`cd codex-rs && cargo test -p codex-cli` 均通过。
+- Windows 交叉检查现状：`cd codex-rs && cargo check -p codex-cli --target x86_64-pc-windows-msvc` 在当前环境失败（`E0463: can't find crate for core/std`），需 Windows 实机/标准工具链环境复验 `T5`。
+- 现场清理：无额外 worktree、无临时日志/过渡产物残留。
+- 清理阻塞：尝试删除本地分支 `sdd/windows-tui2-bug` 被会话策略拦截（blocked by policy），需后续在允许策略下执行。
