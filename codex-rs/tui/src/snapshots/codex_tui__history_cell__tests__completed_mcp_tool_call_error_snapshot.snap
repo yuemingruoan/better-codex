@@ -2,5 +2,5 @@
 source: tui/src/history_cell.rs
 expression: rendered
 ---
-• 已调用 search.find_docs({"query":"ratatui styling","limit":3})
-  └ 错误：network timeout
+• Called search.find_docs({"query":"ratatui styling","limit":3})
+  └ Error: network timeout

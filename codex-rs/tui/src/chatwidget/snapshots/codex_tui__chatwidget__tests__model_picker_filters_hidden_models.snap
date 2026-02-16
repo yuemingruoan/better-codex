@@ -2,9 +2,9 @@
 source: tui/src/chatwidget/tests.rs
 expression: popup
 ---
-  选择模型与推理强度
-  可通过运行 codex -m <model_name> 或在 config.toml 中访问旧版模型
+  Select Model and Effort
+  Access legacy models by running codex -m <model_name> or in your config.toml
 
 › 1. test-visible-model (current)  test-visible-model description
 
-  按回车选择推理强度，或按 Esc 返回。
+  Press enter to select reasoning effort, or esc to dismiss.

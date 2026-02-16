@@ -328,6 +328,9 @@ async fn resume_model_switch_is_not_duplicated_after_pre_turn_override() -> Resu
             summary: None,
             collaboration_mode: None,
             personality: None,
+            spec_parallel_priority: None,
+
+            spec_sdd_planning: None,
         })
         .await?;
     resumed

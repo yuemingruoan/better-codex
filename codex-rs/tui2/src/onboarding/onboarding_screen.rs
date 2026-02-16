@@ -94,7 +94,7 @@ impl OnboardingScreen {
         if show_login_screen {
             let highlighted_mode = match forced_login_method {
                 Some(ForcedLoginMethod::Api) => AuthMode::ApiKey,
-                _ => AuthMode::ChatGPT,
+                _ => AuthMode::Chatgpt,
             };
             steps.push(Step::Auth(AuthModeWidget {
                 request_frame: tui.frame_requester(),

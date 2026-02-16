@@ -98,7 +98,7 @@ impl KeyboardHandler for AuthModeWidget {
         match key_event.code {
             KeyCode::Up | KeyCode::Char('k') => {
                 if self.is_chatgpt_login_allowed() {
-                    self.highlighted_mode = AuthMode::ChatGPT;
+                    self.highlighted_mode = AuthMode::Chatgpt;
                 }
             }
             KeyCode::Down | KeyCode::Char('j') => {
@@ -122,13 +122,15 @@ impl KeyboardHandler for AuthModeWidget {
                 let sign_in_state = { (*self.sign_in_state.read().unwrap()).clone() };
                 match sign_in_state {
                     SignInState::PickMode => match self.highlighted_mode {
-                        AuthMode::ChatGPT if self.is_chatgpt_login_allowed() => {
+                        AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens
+                            if self.is_chatgpt_login_allowed() =>
+                        {
                             self.start_chatgpt_login();
                         }
                         AuthMode::ApiKey if self.is_api_login_allowed() => {
                             self.start_api_key_entry();
                         }
-                        AuthMode::ChatGPT => {}
+                        AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens => {}
                         AuthMode::ApiKey => {
                             self.disallow_api_login();
                         }
@@ -194,7 +196,7 @@ impl AuthModeWidget {
     }
 
     fn disallow_api_login(&mut self) {
-        self.highlighted_mode = AuthMode::ChatGPT;
+        self.highlighted_mode = AuthMode::Chatgpt;
         self.error = Some(tr(self.language, "onboarding.auth.api_key_disabled").to_string());
         *self.sign_in_state.write().unwrap() = SignInState::PickMode;
         self.request_frame.schedule_frame();
@@ -252,7 +254,7 @@ impl AuthModeWidget {
         };
         lines.extend(create_mode_item(
             0,
-            AuthMode::ChatGPT,
+            AuthMode::Chatgpt,
             tr(language, "onboarding.auth.option.chatgpt"),
             chatgpt_description,
         ));
@@ -646,7 +648,7 @@ impl AuthModeWidget {
     fn start_chatgpt_login(&mut self) {
         // If we're already authenticated with ChatGPT, don't start a new login –
         // just proceed to the success message flow.
-        if matches!(self.login_status, LoginStatus::AuthMode(AuthMode::ChatGPT)) {
+        if matches!(self.login_status, LoginStatus::AuthMode(AuthMode::Chatgpt)) {
             *self.sign_in_state.write().unwrap() = SignInState::ChatGptSuccess;
             self.request_frame.schedule_frame();
             return;
@@ -762,7 +764,7 @@ mod tests {
         let codex_home_path = codex_home.path().to_path_buf();
         let widget = AuthModeWidget {
             request_frame: FrameRequester::test_dummy(),
-            highlighted_mode: AuthMode::ChatGPT,
+            highlighted_mode: AuthMode::Chatgpt,
             error: None,
             sign_in_state: Arc::new(RwLock::new(SignInState::PickMode)),
             codex_home: codex_home_path.clone(),

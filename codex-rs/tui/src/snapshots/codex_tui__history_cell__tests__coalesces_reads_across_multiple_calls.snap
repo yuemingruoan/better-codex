@@ -2,6 +2,6 @@
 source: tui/src/history_cell.rs
 expression: rendered
 ---
-• 已完成
-  └ 搜索 shimmer_spans
-    读取 shimmer.rs, status_indicator_widget.rs
+• Explored
+  └ Search shimmer_spans
+    Read shimmer.rs, status_indicator_widget.rs

@@ -2,13 +2,14 @@
 source: tui/src/chatwidget/tests.rs
 expression: popup
 ---
-  启用完全访问？
-  当 Codex
-  以完全访问运行时，无需你的批准即可编辑你电脑上的任何文件并运行带网络访问的命
-  令。启用完全访问时请谨慎。这会显著增加数据丢失、泄露或意外行为的风险。
+  Enable full access?
+  When Codex runs with full access, it can edit any file on your computer and
+  run commands with network, without your approval. Exercise caution when
+  enabling full access. This significantly increases the risk of data loss,
+  leaks, or unexpected behavior.
 
-› 1. 仍然继续        仅此会话启用完全访问
-  2. 继续并不再询问  启用完全访问并记住该选择
-  3. 取消            返回且不启用完全访问
+› 1. Yes, continue anyway      Apply full access for this session
+  2. Yes, and don't ask again  Enable full access and remember this choice
+  3. Cancel                    Go back without enabling full access
 
-  按 enter 确认，或 esc 返回
+  Press enter to confirm or esc to go back

@@ -2,6 +2,6 @@
 source: tui/src/chatwidget/tests.rs
 expression: active_blob(&chat)
 ---
-• 已完成
-  └ 列出 ls -la
-    读取 foo.txt
+• Explored
+  └ List ls -la
+    Read foo.txt

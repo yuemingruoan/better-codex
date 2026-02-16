@@ -404,6 +404,22 @@ impl ThreadManagerState {
             .await;
     }
 
+    pub(crate) async fn rename_agent(
+        &self,
+        agent_id: ThreadId,
+        name: String,
+    ) -> CodexResult<AgentRegistryRecord> {
+        let mut registry = self.agent_registry.write().await;
+        let Some(record) = registry.get_mut(&agent_id) else {
+            return Err(CodexErr::ThreadNotFound(agent_id));
+        };
+        if record.label.as_deref() != Some(name.as_str()) {
+            record.label = Some(name);
+            record.updated_at_ms = unix_timestamp_ms();
+        }
+        Ok(record.clone())
+    }
+
     pub(crate) async fn get_agent_record(&self, agent_id: ThreadId) -> Option<AgentRegistryRecord> {
         self.agent_registry.read().await.get(&agent_id).cloned()
     }
@@ -488,6 +504,25 @@ impl ThreadManagerState {
         self.spawn_thread_with_source(
             config,
             InitialHistory::New,
+            Arc::clone(&self.auth_manager),
+            agent_control,
+            session_source,
+            Vec::new(),
+        )
+        .await
+    }
+
+    pub(crate) async fn resume_thread_from_rollout_with_source(
+        &self,
+        config: Config,
+        rollout_path: PathBuf,
+        agent_control: AgentControl,
+        session_source: SessionSource,
+    ) -> CodexResult<NewThread> {
+        let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
+        self.spawn_thread_with_source(
+            config,
+            initial_history,
             Arc::clone(&self.auth_manager),
             agent_control,
             session_source,

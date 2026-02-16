@@ -325,6 +325,9 @@ async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> 
             summary: None,
             collaboration_mode: None,
             personality: Some(Personality::Friendly),
+            spec_parallel_priority: None,
+
+            spec_sdd_planning: None,
         })
         .await?;
 
@@ -422,6 +425,9 @@ async fn user_turn_personality_same_value_does_not_add_update_message() -> anyho
             summary: None,
             collaboration_mode: None,
             personality: Some(Personality::Pragmatic),
+            spec_parallel_priority: None,
+
+            spec_sdd_planning: None,
         })
         .await?;
 
@@ -528,6 +534,9 @@ async fn user_turn_personality_skips_if_feature_disabled() -> anyhow::Result<()>
             summary: None,
             collaboration_mode: None,
             personality: Some(Personality::Pragmatic),
+            spec_parallel_priority: None,
+
+            spec_sdd_planning: None,
         })
         .await?;
 
@@ -613,6 +622,7 @@ async fn ignores_remote_personality_if_remote_models_disabled() -> anyhow::Resul
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
         input_modalities: default_input_modalities(),
+        prefer_websockets: false,
     };
 
     let _models_mock = mount_models_once(
@@ -729,6 +739,7 @@ async fn remote_model_friendly_personality_instructions_with_feature() -> anyhow
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
         input_modalities: default_input_modalities(),
+        prefer_websockets: false,
     };
 
     let _models_mock = mount_models_once(
@@ -840,6 +851,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
         input_modalities: default_input_modalities(),
+        prefer_websockets: false,
     };
 
     let _models_mock = mount_models_once(
@@ -903,6 +915,9 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
             summary: None,
             collaboration_mode: None,
             personality: Some(Personality::Friendly),
+            spec_parallel_priority: None,
+
+            spec_sdd_planning: None,
         })
         .await?;
 

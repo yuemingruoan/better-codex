@@ -2,4 +2,4 @@
 source: tui/src/history_cell.rs
 expression: rendered
 ---
-• 正在调用 search.find_docs({"query":"ratatui styling","limit":3})
+• Calling search.find_docs({"query":"ratatui styling","limit":3})

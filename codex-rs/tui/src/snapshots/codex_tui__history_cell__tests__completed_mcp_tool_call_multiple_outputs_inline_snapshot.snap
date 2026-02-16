@@ -2,6 +2,6 @@
 source: tui/src/history_cell.rs
 expression: rendered
 ---
-• 已调用 metrics.summary({"metric":"trace.latency","window":"15m"})
+• Called metrics.summary({"metric":"trace.latency","window":"15m"})
   └ Latency summary: p50=120ms, p95=480ms.
     No anomalies detected.

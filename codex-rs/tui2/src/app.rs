@@ -51,7 +51,7 @@ use codex_core::AuthManager;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::config::edit::ConfigEditsBuilder;
-#[cfg(target_os = "windows")]
+use codex_core::config::types::SubagentPreset;
 use codex_core::features::Feature;
 use codex_core::models_manager::manager::RefreshStrategy;
 use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
@@ -135,6 +135,7 @@ impl From<AppExitInfo> for codex_tui::AppExitInfo {
         codex_tui::AppExitInfo {
             token_usage: info.token_usage,
             thread_id: info.conversation_id,
+            thread_name: None,
             update_action: info.update_action.map(Into::into),
             exit_reason,
         }
@@ -569,20 +570,8 @@ impl App {
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
         #[cfg(not(debug_assertions))]
         let upgrade_version = crate::updates::get_upgrade_version(&config);
-        let scroll_config = ScrollConfig::from_terminal(
-            &terminal_info(),
-            ScrollConfigOverrides {
-                events_per_tick: config.tui_scroll_events_per_tick,
-                wheel_lines_per_tick: config.tui_scroll_wheel_lines,
-                trackpad_lines_per_tick: config.tui_scroll_trackpad_lines,
-                trackpad_accel_events: config.tui_scroll_trackpad_accel_events,
-                trackpad_accel_max: config.tui_scroll_trackpad_accel_max,
-                mode: Some(config.tui_scroll_mode),
-                wheel_tick_detect_max_ms: config.tui_scroll_wheel_tick_detect_max_ms,
-                wheel_like_max_duration_ms: config.tui_scroll_wheel_like_max_duration_ms,
-                invert_direction: config.tui_scroll_invert,
-            },
-        );
+        let scroll_config =
+            ScrollConfig::from_terminal(&terminal_info(), ScrollConfigOverrides::default());
 
         let copy_selection_shortcut = crate::transcript_copy_ui::detect_copy_selection_shortcut();
 
@@ -626,7 +615,9 @@ impl App {
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
         #[cfg(target_os = "windows")]
         {
-            let should_check = codex_core::get_platform_sandbox().is_some()
+            let windows_sandbox_enabled =
+                WindowsSandboxLevel::from_config(&app.config) != WindowsSandboxLevel::Disabled;
+            let should_check = codex_core::get_platform_sandbox(windows_sandbox_enabled).is_some()
                 && matches!(
                     app.config.sandbox_policy.get(),
                     codex_core::protocol::SandboxPolicy::WorkspaceWrite { .. }
@@ -1770,6 +1761,71 @@ impl App {
                 self.chat_widget.set_language(language);
                 self.transcript_copy_ui.set_language(language);
             }
+            AppEvent::UpdateSpecParallelPriority(enabled) => {
+                self.config.spec.parallel_priority = enabled;
+                self.chat_widget.set_spec_parallel_priority(enabled);
+            }
+            AppEvent::UpdateCollabFeature(enabled) => {
+                if enabled {
+                    self.config.features.enable(Feature::Collab);
+                } else {
+                    self.config.features.disable(Feature::Collab);
+                }
+                self.chat_widget
+                    .set_feature_enabled(Feature::Collab, enabled);
+            }
+            AppEvent::UpdateSubagentPresetModel { preset, model } => {
+                self.chat_widget
+                    .set_subagent_preset_model(preset, model.clone());
+                match preset {
+                    SubagentPreset::Edit => {
+                        self.config.subagent_presets.edit.model = model;
+                    }
+                    SubagentPreset::Read => {
+                        self.config.subagent_presets.read.model = model;
+                    }
+                    SubagentPreset::Grep => {
+                        self.config.subagent_presets.grep.model = model;
+                    }
+                    SubagentPreset::Run => {
+                        self.config.subagent_presets.run.model = model;
+                    }
+                    SubagentPreset::Websearch => {
+                        self.config.subagent_presets.websearch.model = model;
+                    }
+                }
+            }
+            AppEvent::UpdateSubagentPresetReasoningEffort { preset, effort } => {
+                self.chat_widget
+                    .set_subagent_preset_reasoning_effort(preset, effort);
+                match preset {
+                    SubagentPreset::Edit => {
+                        self.config.subagent_presets.edit.reasoning_effort = effort;
+                    }
+                    SubagentPreset::Read => {
+                        self.config.subagent_presets.read.reasoning_effort = effort;
+                    }
+                    SubagentPreset::Grep => {
+                        self.config.subagent_presets.grep.reasoning_effort = effort;
+                    }
+                    SubagentPreset::Run => {
+                        self.config.subagent_presets.run.reasoning_effort = effort;
+                    }
+                    SubagentPreset::Websearch => {
+                        self.config.subagent_presets.websearch.reasoning_effort = effort;
+                    }
+                }
+            }
+            AppEvent::OpenSubagentPresetActions { preset } => {
+                self.chat_widget.open_subagent_preset_actions(preset);
+            }
+            AppEvent::OpenSubagentPresetModelPicker { preset } => {
+                self.chat_widget.open_subagent_preset_model_picker(preset);
+            }
+            AppEvent::OpenSubagentPresetReasoningPicker { preset } => {
+                self.chat_widget
+                    .open_subagent_preset_reasoning_picker(preset);
+            }
             AppEvent::OpenReasoningPopup { model } => {
                 self.chat_widget.open_reasoning_popup(model);
             }
@@ -1907,9 +1963,14 @@ impl App {
                                         cwd: None,
                                         approval_policy: Some(preset.approval),
                                         sandbox_policy: Some(preset.sandbox.clone()),
+                                        windows_sandbox_level: None,
                                         model: None,
                                         effort: None,
                                         summary: None,
+                                        collaboration_mode: None,
+                                        personality: None,
+                                        spec_parallel_priority: None,
+                                        spec_sdd_planning: None,
                                     },
                                 ));
                                 self.app_event_tx
@@ -2028,6 +2089,163 @@ impl App {
                     }
                 }
             }
+            AppEvent::PersistSpecParallelPriority { enabled } => {
+                let profile = self.active_profile.as_deref();
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(profile)
+                    .set_spec_parallel_priority(enabled)
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {
+                        let key = if enabled {
+                            "app.spec.parallel_priority.enabled"
+                        } else {
+                            "app.spec.parallel_priority.disabled"
+                        };
+                        let mut message = tr(self.config.language, key).to_string();
+                        if let Some(profile) = profile {
+                            message.push_str(&tr_args(
+                                self.config.language,
+                                "app.spec.parallel_priority.profile_suffix",
+                                &[("profile", profile)],
+                            ));
+                        }
+                        self.chat_widget.add_info_message(message, None);
+                    }
+                    Err(err) => {
+                        tracing::error!(
+                            error = %err,
+                            "failed to persist parallel priority spec selection"
+                        );
+                        let key = if profile.is_some() {
+                            "app.spec.parallel_priority.save_profile_failed"
+                        } else {
+                            "app.spec.parallel_priority.save_default_failed"
+                        };
+                        let message = if let Some(profile) = profile {
+                            tr_args(
+                                self.config.language,
+                                key,
+                                &[("profile", profile), ("error", &err.to_string())],
+                            )
+                        } else {
+                            tr_args(self.config.language, key, &[("error", &err.to_string())])
+                        };
+                        self.chat_widget.add_error_message(message);
+                    }
+                }
+            }
+            AppEvent::PersistCollabFeature { enabled } => {
+                let profile = self.active_profile.as_deref();
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(profile)
+                    .set_feature_enabled(Feature::Collab.key(), enabled)
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {
+                        let key = if enabled {
+                            "app.collab.enabled"
+                        } else {
+                            "app.collab.disabled"
+                        };
+                        let mut message = tr(self.config.language, key).to_string();
+                        if let Some(profile) = profile {
+                            message.push_str(&tr_args(
+                                self.config.language,
+                                "app.collab.profile_suffix",
+                                &[("profile", profile)],
+                            ));
+                        }
+                        self.chat_widget.add_info_message(message, None);
+                    }
+                    Err(err) => {
+                        tracing::error!(error = %err, "failed to persist collab feature setting");
+                        let key = if profile.is_some() {
+                            "app.collab.save_profile_failed"
+                        } else {
+                            "app.collab.save_default_failed"
+                        };
+                        let message = if let Some(profile) = profile {
+                            tr_args(
+                                self.config.language,
+                                key,
+                                &[("profile", profile), ("error", &err.to_string())],
+                            )
+                        } else {
+                            tr_args(self.config.language, key, &[("error", &err.to_string())])
+                        };
+                        self.chat_widget.add_error_message(message);
+                    }
+                }
+            }
+            AppEvent::PersistSubagentPresetModel { preset, model } => {
+                let preset_label = Self::subagent_preset_label(preset, self.config.language);
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .set_subagent_preset_model(preset, model.as_deref())
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {
+                        let message = if let Some(model) = model {
+                            tr_args(
+                                self.config.language,
+                                "app.preset.saved_with_model",
+                                &[("preset", preset_label), ("model", &model)],
+                            )
+                        } else {
+                            tr_args(
+                                self.config.language,
+                                "app.preset.cleared_model",
+                                &[("preset", preset_label)],
+                            )
+                        };
+                        self.chat_widget.add_info_message(message, None);
+                    }
+                    Err(err) => {
+                        tracing::error!(
+                            error = %err,
+                            "failed to persist subagent preset model"
+                        );
+                        let message = tr_args(
+                            self.config.language,
+                            "app.preset.save_failed",
+                            &[("preset", preset_label), ("error", &err.to_string())],
+                        );
+                        self.chat_widget.add_error_message(message);
+                    }
+                }
+            }
+            AppEvent::PersistSubagentPresetReasoningEffort { preset, effort } => {
+                let preset_label = Self::subagent_preset_label(preset, self.config.language);
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .set_subagent_preset_reasoning_effort(preset, effort)
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {
+                        let message = tr_args(
+                            self.config.language,
+                            "app.preset.saved",
+                            &[("preset", preset_label)],
+                        );
+                        self.chat_widget.add_info_message(message, None);
+                    }
+                    Err(err) => {
+                        tracing::error!(
+                            error = %err,
+                            "failed to persist subagent preset reasoning effort"
+                        );
+                        let message = tr_args(
+                            self.config.language,
+                            "app.preset.save_failed",
+                            &[("preset", preset_label), ("error", &err.to_string())],
+                        );
+                        self.chat_widget.add_error_message(message);
+                    }
+                }
+            }
             AppEvent::PersistApprovalSelection {
                 approval_policy,
                 sandbox_mode,
@@ -2087,8 +2305,11 @@ impl App {
                     return Ok(AppRunControl::Continue);
                 }
                 #[cfg(target_os = "windows")]
+                let windows_sandbox_enabled =
+                    WindowsSandboxLevel::from_config(&self.config) != WindowsSandboxLevel::Disabled;
+                #[cfg(target_os = "windows")]
                 if !matches!(&policy, codex_core::protocol::SandboxPolicy::ReadOnly)
-                    || codex_core::get_platform_sandbox().is_some()
+                    || codex_core::get_platform_sandbox(windows_sandbox_enabled).is_some()
                 {
                     self.config.forced_auto_mode_downgraded_on_windows = false;
                 }
@@ -2112,7 +2333,8 @@ impl App {
                         return Ok(AppRunControl::Continue);
                     }
 
-                    let should_check = codex_core::get_platform_sandbox().is_some()
+                    let should_check = codex_core::get_platform_sandbox(windows_sandbox_enabled)
+                        .is_some()
                         && policy_is_workspace_write_or_ro
                         && !self.chat_widget.world_writable_warning_hidden();
                     if should_check {
@@ -2297,6 +2519,17 @@ impl App {
     ) -> Option<&'static str> {
         (!model.starts_with("codex-auto-"))
             .then(|| Self::reasoning_label(reasoning_effort, language))
+    }
+
+    fn subagent_preset_label(preset: SubagentPreset, language: Language) -> &'static str {
+        let key = match preset {
+            SubagentPreset::Edit => "chatwidget.preset_popup.preset_edit",
+            SubagentPreset::Read => "chatwidget.preset_popup.preset_read",
+            SubagentPreset::Grep => "chatwidget.preset_popup.preset_grep",
+            SubagentPreset::Run => "chatwidget.preset_popup.preset_run",
+            SubagentPreset::Websearch => "chatwidget.preset_popup.preset_websearch",
+        };
+        tr(language, key)
     }
 
     pub(crate) fn token_usage(&self) -> codex_core::protocol::TokenUsage {
@@ -2839,6 +3072,8 @@ mod tests {
         let make_header = |is_first| {
             let event = SessionConfiguredEvent {
                 session_id: ThreadId::new(),
+                forked_from_id: None,
+                thread_name: None,
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
                 approval_policy: AskForApproval::Never,
@@ -2848,7 +3083,8 @@ mod tests {
                 history_log_id: 0,
                 history_entry_count: 0,
                 initial_messages: None,
-                rollout_path: PathBuf::new(),
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
             };
             Arc::new(new_session_info(
                 app.chat_widget.config_ref(),
@@ -2880,6 +3116,8 @@ mod tests {
             id: String::new(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: base_id,
+                forked_from_id: None,
+                thread_name: None,
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
                 approval_policy: AskForApproval::Never,
@@ -2889,7 +3127,8 @@ mod tests {
                 history_log_id: 0,
                 history_entry_count: 0,
                 initial_messages: None,
-                rollout_path: PathBuf::new(),
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
             }),
         });
 
@@ -3163,6 +3402,8 @@ mod tests {
         let conversation_id = ThreadId::new();
         let event = SessionConfiguredEvent {
             session_id: conversation_id,
+            forked_from_id: None,
+            thread_name: None,
             model: "gpt-test".to_string(),
             model_provider_id: "test-provider".to_string(),
             approval_policy: AskForApproval::Never,
@@ -3172,7 +3413,8 @@ mod tests {
             history_log_id: 0,
             history_entry_count: 0,
             initial_messages: None,
-            rollout_path: PathBuf::new(),
+            network_proxy: None,
+            rollout_path: Some(PathBuf::new()),
         };
 
         app.chat_widget.handle_codex_event(Event {

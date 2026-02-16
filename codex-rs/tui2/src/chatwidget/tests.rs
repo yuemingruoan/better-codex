@@ -48,6 +48,7 @@ use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::RateLimitWindow;
+use codex_core::protocol::RequestUserInputEvent;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::ReviewTarget;
 use codex_core::protocol::SddGitAction;
@@ -70,6 +71,8 @@ use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::CodexErrorInfo;
+use codex_protocol::request_user_input::RequestUserInputQuestion;
+use codex_protocol::request_user_input::RequestUserInputQuestionOption;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use crossterm::event::KeyCode;
@@ -79,6 +82,7 @@ use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
 #[cfg(target_os = "windows")]
 use serial_test::serial;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
@@ -135,6 +139,9 @@ async fn resumed_initial_messages_render_history() {
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,
         history_entry_count: 0,
+        network_proxy: None,
+        forked_from_id: None,
+        thread_name: None,
         initial_messages: Some(vec![
             EventMsg::UserMessage(UserMessageEvent {
                 message: "hello from user".to_string(),
@@ -146,7 +153,7 @@ async fn resumed_initial_messages_render_history() {
                 message: "assistant reply".to_string(),
             }),
         ]),
-        rollout_path: rollout_file.path().to_path_buf(),
+        rollout_path: Some(rollout_file.path().to_path_buf()),
     };
 
     chat.handle_codex_event(Event {
@@ -204,9 +211,11 @@ async fn collab_events_emit_history_lines() {
         id: "collab-wait-end".into(),
         msg: EventMsg::CollabWaitingEnd(CollabWaitingEndEvent {
             sender_thread_id,
-            receiver_thread_id,
             call_id: "call-2".to_string(),
-            status: AgentStatus::Completed(Some("done".to_string())),
+            statuses: HashMap::from([(
+                receiver_thread_id,
+                AgentStatus::Completed(Some("done".to_string())),
+            )]),
         }),
     });
     let cells = drain_insert_history(&mut rx);
@@ -474,6 +483,7 @@ async fn make_chatwidget_manual(
         frame_requester: FrameRequester::test_dummy(),
         show_welcome_banner: true,
         queued_user_messages: VecDeque::new(),
+        pending_request_user_input: VecDeque::new(),
         suppress_session_configured_redraw: false,
         pending_notification: None,
         quit_shortcut_expires_at: None,
@@ -491,6 +501,7 @@ async fn make_chatwidget_manual(
         sdd_pending_git_action: None,
         sdd_git_action_failed: false,
         sdd_new_session_after_cleanup: false,
+        sdd_spec_sdd_planning_restore: None,
     };
     (widget, rx, op_rx)
 }
@@ -1013,6 +1024,40 @@ fn begin_exec(chat: &mut ChatWidget, call_id: &str, raw_cmd: &str) -> ExecComman
     begin_exec_with_source(chat, call_id, raw_cmd, ExecCommandSource::Agent)
 }
 
+fn sample_request_user_input_event(call_id: &str, turn_id: &str) -> RequestUserInputEvent {
+    RequestUserInputEvent {
+        call_id: call_id.to_string(),
+        turn_id: turn_id.to_string(),
+        questions: vec![
+            RequestUserInputQuestion {
+                id: "auth_method".to_string(),
+                header: "Auth method".to_string(),
+                question: "Which auth method should we use?".to_string(),
+                is_other: false,
+                is_secret: false,
+                options: Some(vec![
+                    RequestUserInputQuestionOption {
+                        label: "OAuth".to_string(),
+                        description: "Use browser-based OAuth flow.".to_string(),
+                    },
+                    RequestUserInputQuestionOption {
+                        label: "API Key".to_string(),
+                        description: "Use static API key from env var.".to_string(),
+                    },
+                ]),
+            },
+            RequestUserInputQuestion {
+                id: "account_id".to_string(),
+                header: "Account".to_string(),
+                question: "What account id should be used?".to_string(),
+                is_other: false,
+                is_secret: true,
+                options: None,
+            },
+        ],
+    }
+}
+
 fn end_exec(
     chat: &mut ChatWidget,
     begin_event: ExecCommandBeginEvent,
@@ -1465,6 +1510,184 @@ async fn slash_fork_opens_picker() {
 }
 
 #[tokio::test]
+async fn slash_collab_selection_plan_enables_feature() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.features.disable(Feature::Collab);
+
+    chat.dispatch_command(SlashCommand::Collab);
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let mut saw_update = false;
+    let mut saw_persist = false;
+    while let Ok(ev) = rx.try_recv() {
+        saw_update |= matches!(ev, AppEvent::UpdateCollabFeature(true));
+        saw_persist |= matches!(ev, AppEvent::PersistCollabFeature { enabled: true });
+    }
+    assert!(saw_update, "Plan should enable collab feature in app state");
+    assert!(saw_persist, "Plan should persist collab feature = true");
+}
+
+#[tokio::test]
+async fn slash_collab_selection_proxy_enables_feature() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.features.disable(Feature::Collab);
+
+    chat.dispatch_command(SlashCommand::Collab);
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let mut saw_update = false;
+    let mut saw_persist = false;
+    while let Ok(ev) = rx.try_recv() {
+        saw_update |= matches!(ev, AppEvent::UpdateCollabFeature(true));
+        saw_persist |= matches!(ev, AppEvent::PersistCollabFeature { enabled: true });
+    }
+    assert!(
+        saw_update,
+        "Proxy should enable collab feature in app state"
+    );
+    assert!(saw_persist, "Proxy should persist collab feature = true");
+}
+
+#[tokio::test]
+async fn slash_collab_selection_close_disables_feature() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.features.enable(Feature::Collab);
+
+    chat.dispatch_command(SlashCommand::Collab);
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let mut saw_update = false;
+    let mut saw_persist = false;
+    while let Ok(ev) = rx.try_recv() {
+        saw_update |= matches!(ev, AppEvent::UpdateCollabFeature(false));
+        saw_persist |= matches!(ev, AppEvent::PersistCollabFeature { enabled: false });
+    }
+    assert!(
+        saw_update,
+        "Close should disable collab feature in app state"
+    );
+    assert!(saw_persist, "Close should persist collab feature = false");
+}
+
+#[tokio::test]
+async fn slash_spec_selection_blocks_parallel_priority_enable_when_collab_disabled() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.features.disable(Feature::Collab);
+    chat.config.spec.parallel_priority = false;
+
+    chat.dispatch_command(SlashCommand::Spec);
+    chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert!(
+        rx.try_recv().is_err(),
+        "parallel priority should not be enable-able when collab is disabled"
+    );
+}
+
+#[tokio::test]
+async fn slash_spec_selection_enables_parallel_priority() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.features.enable(Feature::Collab);
+    chat.config.spec.parallel_priority = false;
+
+    chat.dispatch_command(SlashCommand::Spec);
+    chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::CodexOp(Op::OverrideTurnContext {
+            spec_parallel_priority: Some(true),
+
+            spec_sdd_planning: None,
+            ..
+        }))
+    );
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::UpdateSpecParallelPriority(true))
+    );
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::PersistSpecParallelPriority { enabled: true })
+    );
+}
+
+#[tokio::test]
+async fn slash_spec_selection_disables_parallel_priority() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.features.disable(Feature::Collab);
+    chat.config.spec.parallel_priority = true;
+
+    chat.dispatch_command(SlashCommand::Spec);
+    chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::CodexOp(Op::OverrideTurnContext {
+            spec_parallel_priority: Some(false),
+
+            spec_sdd_planning: None,
+            ..
+        }))
+    );
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::UpdateSpecParallelPriority(false))
+    );
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::PersistSpecParallelPriority { enabled: false })
+    );
+}
+
+#[tokio::test]
+async fn preset_actions_popup_hides_clear_overrides() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.open_subagent_preset_actions(SubagentPreset::Edit);
+
+    let width = 90;
+    let height = chat.desired_height(width);
+    let area = ratatui::layout::Rect::new(0, 0, width, height);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    chat.render(area, &mut buf);
+
+    let mut rendered = String::new();
+    for y in 0..area.height {
+        for x in 0..area.width {
+            let symbol = buf[(x, y)].symbol();
+            if symbol.is_empty() {
+                rendered.push(' ');
+            } else {
+                rendered.push_str(symbol);
+            }
+        }
+        rendered.push('\n');
+    }
+
+    assert!(
+        !rendered.contains(tr(
+            chat.config.language,
+            "chatwidget.preset_popup.action_clear_model"
+        )),
+        "preset popup should not show clear model action: {rendered}"
+    );
+    assert!(
+        !rendered.contains(tr(
+            chat.config.language,
+            "chatwidget.preset_popup.action_clear_reasoning"
+        )),
+        "preset popup should not show clear reasoning action: {rendered}"
+    );
+}
+
+#[tokio::test]
 async fn slash_rollout_displays_current_path() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     let rollout_path = PathBuf::from("/tmp/codex-test-rollout.jsonl");
@@ -1543,6 +1766,18 @@ async fn sdd_develop_parallels_plan_approval_sends_execute_prompt_without_create
         "implement parallels workflow".to_string(),
     );
     let initial_ops = drain_ops(&mut op_rx);
+    assert!(
+        initial_ops.iter().any(|op| {
+            matches!(
+                op,
+                Op::OverrideTurnContext {
+                    spec_sdd_planning: Some(true),
+                    ..
+                }
+            )
+        }),
+        "expected parallels workflow to auto-enable SDD planning"
+    );
     let plan_prompt = initial_ops
         .iter()
         .find_map(find_text_input)
@@ -1584,6 +1819,47 @@ async fn sdd_develop_parallels_plan_approval_sends_execute_prompt_without_create
 }
 
 #[tokio::test]
+async fn sdd_develop_standard_creates_branch_before_plan_prompt() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command_with_args(
+        SlashCommand::SddDevelop,
+        "implement standard workflow".to_string(),
+    );
+    let initial_ops = drain_ops(&mut op_rx);
+    assert!(
+        initial_ops.iter().any(|op| {
+            matches!(
+                op,
+                Op::SddGitAction {
+                    action: SddGitAction::CreateBranch { .. }
+                }
+            )
+        }),
+        "standard workflow should create branch first"
+    );
+    assert!(
+        initial_ops.iter().all(|op| find_text_input(op).is_none()),
+        "standard workflow should not emit plan prompt before branch creation"
+    );
+
+    chat.on_task_complete(None);
+    let post_branch_ops = drain_ops(&mut op_rx);
+    let plan_prompt = post_branch_ops
+        .iter()
+        .find_map(find_text_input)
+        .expect("branch creation completion should emit plan prompt");
+    let plan_prefix = tr(chat.config.language, "prompt.sdd_plan")
+        .lines()
+        .next()
+        .expect("plan template should have first line");
+    assert!(
+        plan_prompt.contains(plan_prefix),
+        "expected standard plan prompt after branch creation, got: {plan_prompt}"
+    );
+}
+
+#[tokio::test]
 async fn sdd_develop_parallels_merge_sends_prompt_without_finalize_merge() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.config.features.enable(Feature::Collab);
@@ -1620,6 +1896,18 @@ async fn sdd_develop_parallels_merge_sends_prompt_without_finalize_merge() {
             )
         }),
         "parallels merge should not trigger finalize-merge git action"
+    );
+    assert!(
+        merge_ops.iter().any(|op| {
+            matches!(
+                op,
+                Op::OverrideTurnContext {
+                    spec_sdd_planning: Some(false),
+                    ..
+                }
+            )
+        }),
+        "expected parallels workflow to restore SDD planning setting after merge handoff"
     );
 }
 
@@ -1876,6 +2164,7 @@ async fn interrupted_turn_error_message_snapshot() {
         id: "task-1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
+            collaboration_mode_kind: Default::default(),
         }),
     });
 
@@ -1894,6 +2183,122 @@ async fn interrupted_turn_error_message_snapshot() {
     );
     let last = lines_to_single_string(cells.last().unwrap());
     assert_snapshot!("interrupted_turn_error_message", last);
+}
+
+#[tokio::test]
+async fn request_user_input_event_renders_history_cell() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let event = sample_request_user_input_event("rui-call-1", "turn-1");
+
+    chat.handle_codex_event(Event {
+        id: "rui-call-1".into(),
+        msg: EventMsg::RequestUserInput(event.clone()),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(
+        cells.len(),
+        1,
+        "expected one request_user_input history cell"
+    );
+
+    let unanswered_count = event.questions.len().to_string();
+    let rendered = lines_to_single_string(&cells[0]);
+    let unanswered = tr_args(
+        chat.config.language,
+        "request_user_input.progress.unanswered",
+        &[("count", &unanswered_count)],
+    );
+    assert!(
+        rendered.contains("request_user_input [rui-call-1]"),
+        "expected request id in history cell: {rendered:?}",
+    );
+    assert!(
+        rendered.contains(&unanswered),
+        "expected unanswered summary in history cell: {rendered:?}",
+    );
+    assert!(
+        rendered.contains("Which auth method should we use?"),
+        "expected first question text in history cell: {rendered:?}",
+    );
+    assert!(
+        rendered.contains("OAuth: Use browser-based OAuth flow."),
+        "expected option details in history cell: {rendered:?}",
+    );
+    assert_eq!(
+        chat.pending_request_user_input.len(),
+        1,
+        "request_user_input should remain pending until turn resolves",
+    );
+}
+
+#[tokio::test]
+async fn interrupted_turn_renders_queued_request_user_input_status() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let request = sample_request_user_input_event("rui-call-2", "turn-2");
+
+    chat.handle_codex_event(Event {
+        id: "turn-2".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+            collaboration_mode_kind: Default::default(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "turn-2".into(),
+        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            delta: "streaming".to_string(),
+        }),
+    });
+    let _ = drain_insert_history(&mut rx);
+
+    chat.handle_codex_event(Event {
+        id: "rui-call-2".into(),
+        msg: EventMsg::RequestUserInput(request),
+    });
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "request_user_input should be queued while stream output is active",
+    );
+    assert!(
+        chat.pending_request_user_input.is_empty(),
+        "queued request_user_input should not be handled before interrupt",
+    );
+
+    chat.handle_codex_event(Event {
+        id: "turn-2".into(),
+        msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+            reason: TurnAbortReason::Interrupted,
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let interrupted = tr(chat.config.language, "chatwidget.stream.interrupted").to_string();
+    assert!(
+        rendered.contains("request_user_input [rui-call-2]"),
+        "expected queued request_user_input to be rendered after interrupt: {rendered:?}",
+    );
+    assert!(
+        rendered.contains(&interrupted),
+        "expected interrupted status in history output: {rendered:?}",
+    );
+    assert!(
+        rendered.contains("Which auth method should we use?"),
+        "expected question text in interrupted output: {rendered:?}",
+    );
+    assert!(
+        chat.pending_request_user_input.is_empty(),
+        "pending request_user_input should be cleared after interrupted rendering",
+    );
+    assert!(
+        chat.interrupts.is_empty(),
+        "interrupt queue should not retain request_user_input events after interrupt",
+    );
 }
 
 /// Opening custom prompt from the review popup, pressing Esc returns to the
@@ -2043,10 +2448,12 @@ async fn model_picker_hides_show_in_picker_false_models_from_cache() {
             effort: ReasoningEffortConfig::Medium,
             description: "medium".to_string(),
         }],
+        supports_personality: false,
         is_default: false,
         upgrade: None,
         show_in_picker,
         supported_in_api: true,
+        input_modalities: Vec::new(),
     };
 
     chat.open_model_popup_with_presets(vec![
@@ -2295,10 +2702,12 @@ async fn single_reasoning_option_skips_selection() {
         description: "".to_string(),
         default_reasoning_effort: ReasoningEffortConfig::High,
         supported_reasoning_efforts: single_effort,
+        supports_personality: false,
         is_default: false,
         upgrade: None,
         show_in_picker: true,
         supported_in_api: true,
+        input_modalities: Vec::new(),
     };
     chat.open_reasoning_popup(preset);
 
@@ -2712,6 +3121,7 @@ async fn ui_snapshots_small_heights_task_running() {
         id: "task-1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
+            collaboration_mode_kind: Default::default(),
         }),
     });
     chat.handle_codex_event(Event {
@@ -2743,6 +3153,7 @@ async fn status_widget_and_approval_modal_snapshot() {
         id: "task-1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
+            collaboration_mode_kind: Default::default(),
         }),
     });
     // Provide a deterministic header for the status line.
@@ -2795,6 +3206,7 @@ async fn status_widget_active_snapshot() {
         id: "task-1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
+            collaboration_mode_kind: Default::default(),
         }),
     });
     // Provide a deterministic header via a bold reasoning chunk.
@@ -2844,6 +3256,7 @@ async fn mcp_startup_complete_does_not_clear_running_task() {
         id: "task-1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
+            collaboration_mode_kind: Default::default(),
         }),
     });
 
@@ -3398,6 +3811,7 @@ async fn stream_recovery_restores_previous_status_header() {
         id: "task".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
+            collaboration_mode_kind: Default::default(),
         }),
     });
     drain_insert_history(&mut rx);
@@ -3435,6 +3849,7 @@ async fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
         id: "s1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
+            collaboration_mode_kind: Default::default(),
         }),
     });
 
@@ -3629,6 +4044,7 @@ async fn chatwidget_exec_and_status_layout_vt100_snapshot() {
         id: "t1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
+            collaboration_mode_kind: Default::default(),
         }),
     });
     chat.handle_codex_event(Event {
@@ -3673,6 +4089,7 @@ async fn chatwidget_markdown_code_blocks_vt100_snapshot() {
         id: "t1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
+            collaboration_mode_kind: Default::default(),
         }),
     });
     // Build a vt100 visual from the history insertions only (no UI overlay)
@@ -3762,6 +4179,7 @@ async fn chatwidget_tall() {
         id: "t1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
             model_context_window: None,
+            collaboration_mode_kind: Default::default(),
         }),
     });
     for i in 0..30 {

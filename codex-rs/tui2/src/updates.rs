@@ -54,7 +54,7 @@ struct VersionInfo {
 
 const VERSION_FILENAME: &str = "version.json";
 const LATEST_RELEASE_URL: &str =
-    "https://api.github.com/repos/yuemingruoan/better-chinese-codex/releases/latest";
+    "https://api.github.com/repos/yuemingruoan/better-codex/releases/latest";
 
 #[derive(Deserialize, Debug, Clone)]
 struct ReleaseInfo {

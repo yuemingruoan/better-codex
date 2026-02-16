@@ -22,8 +22,6 @@ use crate::history_cell;
 use crate::history_cell::HistoryCell;
 #[cfg(not(debug_assertions))]
 use crate::history_cell::UpdateAvailableHistoryCell;
-use crate::i18n::language_name;
-use crate::i18n::tr;
 use crate::i18n::tr_args;
 use crate::model_migration::ModelMigrationOutcome;
 use crate::model_migration::migration_copy_for_models;
@@ -63,11 +61,9 @@ use codex_core::protocol::TokenUsage;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_otel::OtelManager;
+use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
-use codex_protocol::config_types::Language;
 use codex_protocol::config_types::Personality;
-#[cfg(target_os = "windows")]
-use codex_protocol::config_types::SandboxMode;
 #[cfg(target_os = "windows")]
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::items::TurnItem;
@@ -106,10 +102,7 @@ use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::unbounded_channel;
 use toml::Value as TomlValue;
 
-fn external_editor_hint(language: Language) -> &'static str {
-    tr(language, "app.external_editor.hint")
-}
-
+const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
 const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
 /// Baseline cadence for periodic stream commit animation ticks.
 ///
@@ -176,23 +169,16 @@ fn errors_for_cwd(cwd: &Path, response: &ListSkillsResponseEvent) -> Vec<SkillEr
         .unwrap_or_default()
 }
 
-fn emit_skill_load_warnings(
-    app_event_tx: &AppEventSender,
-    errors: &[SkillErrorInfo],
-    language: Language,
-) {
+fn emit_skill_load_warnings(app_event_tx: &AppEventSender, errors: &[SkillErrorInfo]) {
     if errors.is_empty() {
         return;
     }
 
     let error_count = errors.len();
-    let message = tr_args(
-        language,
-        "app.skills.invalid",
-        &[("error_count", &error_count.to_string())],
-    );
     app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-        crate::history_cell::new_warning_event(message),
+        crate::history_cell::new_warning_event(format!(
+            "Skipped loading {error_count} skill(s) due to invalid SKILL.md files."
+        )),
     )));
 
     for error in errors {
@@ -552,6 +538,8 @@ pub(crate) struct App {
 
     /// Controls the animation thread that sends CommitTick events.
     pub(crate) commit_anim_running: Arc<AtomicBool>,
+    // Shared across ChatWidget instances so invalid status-line config warnings only emit once.
+    status_line_invalid_items_warned: Arc<AtomicBool>,
 
     // Esc-backtracking state grouped
     pub(crate) backtrack: crate::app_backtrack::BacktrackState,
@@ -622,6 +610,7 @@ impl App {
             is_first_run: false,
             feedback_audience: self.feedback_audience,
             model: Some(self.chat_widget.current_model().to_string()),
+            status_line_invalid_items_warned: self.status_line_invalid_items_warned.clone(),
             otel_manager: self.otel_manager.clone(),
         }
     }
@@ -656,6 +645,17 @@ impl App {
                 "Failed to carry forward sandbox policy override: {err}"
             ));
         }
+    }
+
+    fn open_url_in_browser(&mut self, url: String) {
+        if let Err(err) = webbrowser::open(&url) {
+            self.chat_widget
+                .add_error_message(format!("Failed to open browser for {url}: {err}"));
+            return;
+        }
+
+        self.chat_widget
+            .add_info_message(format!("Opened {url} in your browser."), None);
     }
 
     async fn shutdown_current_thread(&mut self) {
@@ -784,7 +784,14 @@ impl App {
         Ok(())
     }
 
-    fn open_agent_picker(&mut self) {
+    async fn open_agent_picker(&mut self) {
+        let thread_ids: Vec<ThreadId> = self.thread_event_channels.keys().cloned().collect();
+        for thread_id in thread_ids {
+            if self.server.get_thread(thread_id).await.is_err() {
+                self.thread_event_channels.remove(&thread_id);
+            }
+        }
+
         if self.thread_event_channels.is_empty() {
             self.chat_widget
                 .add_info_message("No agents available yet.".to_string(), None);
@@ -923,6 +930,7 @@ impl App {
         for event in snapshot.events {
             self.handle_codex_event_replay(event);
         }
+        self.refresh_status_line();
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -988,17 +996,30 @@ impl App {
         } else {
             FeedbackAudience::External
         };
+        let auth_mode = auth_ref
+            .map(CodexAuth::auth_mode)
+            .map(TelemetryAuthMode::from);
         let otel_manager = OtelManager::new(
             ThreadId::new(),
             model.as_str(),
             model.as_str(),
             auth_ref.and_then(CodexAuth::get_account_id),
             auth_ref.and_then(CodexAuth::get_account_email),
-            auth_ref.map(CodexAuth::api_auth_mode),
+            auth_mode,
+            codex_core::default_client::originator().value,
             config.otel.log_user_prompt,
             codex_core::terminal::user_agent(),
             SessionSource::Cli,
         );
+        if config
+            .tui_status_line
+            .as_ref()
+            .is_some_and(|cmd| !cmd.is_empty())
+        {
+            otel_manager.counter("codex.status_line", 1, &[]);
+        }
+
+        let status_line_invalid_items_warned = Arc::new(AtomicBool::new(false));
 
         let enhanced_keys_supported = tui.enhanced_keys_supported();
         let mut chat_widget = match session_selection {
@@ -1020,6 +1041,7 @@ impl App {
                     is_first_run,
                     feedback_audience,
                     model: Some(model.clone()),
+                    status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     otel_manager: otel_manager.clone(),
                 };
                 ChatWidget::new(init, thread_manager.clone())
@@ -1030,11 +1052,7 @@ impl App {
                     .await
                     .wrap_err_with(|| {
                         let path_display = path.display();
-                        tr_args(
-                            config.language,
-                            "app.session.resume_failed",
-                            &[("path", &path_display.to_string())],
-                        )
+                        format!("Failed to resume session from {path_display}")
                     })?;
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
@@ -1053,21 +1071,19 @@ impl App {
                     is_first_run,
                     feedback_audience,
                     model: config.model.clone(),
+                    status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     otel_manager: otel_manager.clone(),
                 };
                 ChatWidget::new_from_existing(init, resumed.thread, resumed.session_configured)
             }
             SessionSelection::Fork(path) => {
+                otel_manager.counter("codex.thread.fork", 1, &[("source", "cli_subcommand")]);
                 let forked = thread_manager
                     .fork_thread(usize::MAX, config.clone(), path.clone())
                     .await
                     .wrap_err_with(|| {
                         let path_display = path.display();
-                        tr_args(
-                            config.language,
-                            "app.session.fork_failed",
-                            &[("path", &path_display.to_string())],
-                        )
+                        format!("Failed to fork session from {path_display}")
                     })?;
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
@@ -1086,6 +1102,7 @@ impl App {
                     is_first_run,
                     feedback_audience,
                     model: config.model.clone(),
+                    status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     otel_manager: otel_manager.clone(),
                 };
                 ChatWidget::new_from_existing(init, forked.thread, forked.session_configured)
@@ -1117,6 +1134,7 @@ impl App {
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
+            status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
             backtrack: BacktrackState::default(),
             backtrack_render_pending: false,
             feedback: feedback.clone(),
@@ -1165,7 +1183,6 @@ impl App {
                     AppEvent::InsertHistoryCell(Box::new(UpdateAvailableHistoryCell::new(
                         latest_version,
                         crate::update_action::get_update_action(),
-                        app.config.language,
                     ))),
                 )
                 .await?;
@@ -1246,6 +1263,13 @@ impl App {
         tui: &mut tui::Tui,
         event: TuiEvent,
     ) -> Result<AppRunControl> {
+        if matches!(event, TuiEvent::Draw) {
+            let size = tui.terminal.size()?;
+            if size != tui.terminal.last_known_screen_size {
+                self.refresh_status_line();
+            }
+        }
+
         if self.overlay.is_some() {
             let _ = self.handle_backtrack_overlay_event(tui, event).await?;
         } else {
@@ -1319,6 +1343,7 @@ impl App {
                     is_first_run: false,
                     feedback_audience: self.feedback_audience,
                     model: Some(model),
+                    status_line_invalid_items_warned: self.status_line_invalid_items_warned.clone(),
                     otel_manager: self.otel_manager.clone(),
                 };
                 self.chat_widget = ChatWidget::new(init, self.server.clone());
@@ -1326,10 +1351,7 @@ impl App {
                 if let Some(summary) = summary {
                     let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
                     if let Some(command) = summary.resume_command {
-                        let spans = vec![
-                            tr(self.config.language, "app.session.resume_hint").into(),
-                            command.cyan(),
-                        ];
+                        let spans = vec!["To continue this session, run ".into(), command.cyan()];
                         lines.push(spans.into());
                     }
                     self.chat_widget.add_plain_history_lines(lines);
@@ -1337,15 +1359,7 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::OpenResumePicker => {
-                match crate::resume_picker::run_resume_picker(
-                    tui,
-                    &self.config.codex_home,
-                    &self.config.model_provider_id,
-                    false,
-                    self.config.language,
-                )
-                .await?
-                {
+                match crate::resume_picker::run_resume_picker(tui, &self.config, false).await? {
                     SessionSelection::Resume(path) => {
                         let current_cwd = self.config.cwd.clone();
                         let resume_cwd = match crate::resolve_cwd_for_resume_or_fork(
@@ -1409,8 +1423,7 @@ impl App {
                                         vec![summary.usage_line.clone().into()];
                                     if let Some(command) = summary.resume_command {
                                         let spans = vec![
-                                            tr(self.config.language, "app.session.resume_hint")
-                                                .into(),
+                                            "To continue this session, run ".into(),
                                             command.cyan(),
                                         ];
                                         lines.push(spans.into());
@@ -1420,15 +1433,9 @@ impl App {
                             }
                             Err(err) => {
                                 let path_display = path.display();
-                                let message = tr_args(
-                                    self.config.language,
-                                    "app.session.resume_failed_detail",
-                                    &[
-                                        ("path", &path_display.to_string()),
-                                        ("error", &err.to_string()),
-                                    ],
-                                );
-                                self.chat_widget.add_error_message(message);
+                                self.chat_widget.add_error_message(format!(
+                                    "Failed to resume session from {path_display}: {err}"
+                                ));
                             }
                         }
                     }
@@ -1441,58 +1448,66 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::ForkCurrentSession => {
+                self.otel_manager
+                    .counter("codex.thread.fork", 1, &[("source", "slash_command")]);
                 let summary = session_summary(
                     self.chat_widget.token_usage(),
                     self.chat_widget.thread_id(),
                     self.chat_widget.thread_name(),
                 );
+                self.chat_widget
+                    .add_plain_history_lines(vec!["/fork".magenta().into()]);
                 if let Some(path) = self.chat_widget.rollout_path() {
-                    match self
-                        .server
-                        .fork_thread(usize::MAX, self.config.clone(), path.clone())
-                        .await
-                    {
-                        Ok(forked) => {
-                            self.shutdown_current_thread().await;
-                            let init = self.chatwidget_init_for_forked_or_resumed_thread(
-                                tui,
-                                self.config.clone(),
-                            );
-                            self.chat_widget = ChatWidget::new_from_existing(
-                                init,
-                                forked.thread,
-                                forked.session_configured,
-                            );
-                            self.reset_thread_event_state();
-                            if let Some(summary) = summary {
-                                let mut lines: Vec<Line<'static>> =
-                                    vec![summary.usage_line.clone().into()];
-                                if let Some(command) = summary.resume_command {
-                                    let spans = vec![
-                                        tr(self.config.language, "app.session.resume_hint").into(),
-                                        command.cyan(),
-                                    ];
-                                    lines.push(spans.into());
+                    // Fresh threads expose a precomputed path, but the file is
+                    // materialized lazily on first user message.
+                    if path.exists() {
+                        match self
+                            .server
+                            .fork_thread(usize::MAX, self.config.clone(), path.clone())
+                            .await
+                        {
+                            Ok(forked) => {
+                                self.shutdown_current_thread().await;
+                                let init = self.chatwidget_init_for_forked_or_resumed_thread(
+                                    tui,
+                                    self.config.clone(),
+                                );
+                                self.chat_widget = ChatWidget::new_from_existing(
+                                    init,
+                                    forked.thread,
+                                    forked.session_configured,
+                                );
+                                self.reset_thread_event_state();
+                                if let Some(summary) = summary {
+                                    let mut lines: Vec<Line<'static>> =
+                                        vec![summary.usage_line.clone().into()];
+                                    if let Some(command) = summary.resume_command {
+                                        let spans = vec![
+                                            "To continue this session, run ".into(),
+                                            command.cyan(),
+                                        ];
+                                        lines.push(spans.into());
+                                    }
+                                    self.chat_widget.add_plain_history_lines(lines);
                                 }
-                                self.chat_widget.add_plain_history_lines(lines);
+                            }
+                            Err(err) => {
+                                let path_display = path.display();
+                                self.chat_widget.add_error_message(format!(
+                                    "Failed to fork current session from {path_display}: {err}"
+                                ));
                             }
                         }
-                        Err(err) => {
-                            let path_display = path.display();
-                            let message = tr_args(
-                                self.config.language,
-                                "app.session.fork_failed_detail",
-                                &[
-                                    ("path", &path_display.to_string()),
-                                    ("error", &err.to_string()),
-                                ],
-                            );
-                            self.chat_widget.add_error_message(message);
-                        }
+                    } else {
+                        self.chat_widget.add_error_message(
+                            "A thread must contain at least one turn before it can be forked."
+                                .to_string(),
+                        );
                     }
                 } else {
                     self.chat_widget.add_error_message(
-                        tr(self.config.language, "app.session.fork_not_ready").to_string(),
+                        "A thread must contain at least one turn before it can be forked."
+                            .to_string(),
                     );
                 }
 
@@ -1522,6 +1537,11 @@ impl App {
                     } else {
                         tui.insert_history_lines(display);
                     }
+                }
+            }
+            AppEvent::ApplyThreadRollback { num_turns } => {
+                if self.apply_non_pending_thread_rollback(num_turns) {
+                    tui.frame_requester().schedule_frame();
                 }
             }
             AppEvent::StartCommitAnimation => {
@@ -1567,17 +1587,13 @@ impl App {
                 // Enter alternate screen using TUI helper and build pager lines
                 let _ = tui.enter_alt_screen();
                 let pager_lines: Vec<ratatui::text::Line<'static>> = if text.trim().is_empty() {
-                    vec![
-                        tr(self.config.language, "app.diff.no_changes")
-                            .italic()
-                            .into(),
-                    ]
+                    vec!["No changes detected.".italic().into()]
                 } else {
                     text.lines().map(ansi_escape_line).collect()
                 };
                 self.overlay = Some(Overlay::new_static_with_lines(
                     pager_lines,
-                    tr(self.config.language, "app.diff.title").to_string(),
+                    "D I F F".to_string(),
                     self.config.language,
                 ));
                 tui.frame_requester().schedule_frame();
@@ -1597,54 +1613,54 @@ impl App {
                     is_installed,
                 );
             }
+            AppEvent::OpenUrlInBrowser { url } => {
+                self.open_url_in_browser(url);
+            }
+            AppEvent::RefreshConnectors { force_refetch } => {
+                self.chat_widget.refresh_connectors(force_refetch);
+            }
             AppEvent::StartFileSearch(query) => {
                 self.file_search.on_user_query(query);
             }
             AppEvent::FileSearchResult { query, matches } => {
                 self.chat_widget.apply_file_search_result(query, matches);
             }
-            AppEvent::OpenSddPlanOptions => {
-                self.chat_widget.open_sdd_plan_options();
-            }
-            AppEvent::SddPlanApproved => {
-                self.chat_widget.on_sdd_plan_approved().await;
-            }
-            AppEvent::SddPlanRework => {
-                self.chat_widget.on_sdd_plan_rework();
-            }
-            AppEvent::OpenSddDevOptions => {
-                self.chat_widget.open_sdd_dev_options();
-            }
-            AppEvent::SddDevRequestMoreChanges => {
-                self.chat_widget.on_sdd_request_more_changes();
-            }
-            AppEvent::SddDevMergeBranch => {
-                self.chat_widget.on_sdd_merge_branch();
-            }
-            AppEvent::SddDevAbandonBranch => {
-                self.chat_widget.on_sdd_abandon_branch();
-            }
+            AppEvent::OpenSddPlanOptions
+            | AppEvent::SddPlanApproved
+            | AppEvent::SddPlanRework
+            | AppEvent::OpenSddDevOptions
+            | AppEvent::SddDevRequestMoreChanges
+            | AppEvent::SddDevMergeBranch
+            | AppEvent::SddDevAbandonBranch => {}
             AppEvent::RateLimitSnapshotFetched(snapshot) => {
                 self.chat_widget.on_rate_limit_snapshot(Some(snapshot));
             }
-            AppEvent::ConnectorsLoaded(result) => {
-                self.chat_widget.on_connectors_loaded(result);
+            AppEvent::ConnectorsLoaded { result, is_final } => {
+                self.chat_widget.on_connectors_loaded(result, is_final);
             }
             AppEvent::UpdateReasoningEffort(effort) => {
                 self.on_update_reasoning_effort(effort);
+                self.refresh_status_line();
             }
             AppEvent::UpdateModel(model) => {
                 self.chat_widget.set_model(&model);
-            }
-            AppEvent::UpdateCollaborationMode(mask) => {
-                self.chat_widget.set_collaboration_mask(mask);
-            }
-            AppEvent::UpdatePersonality(personality) => {
-                self.on_update_personality(personality);
+                self.refresh_status_line();
             }
             AppEvent::UpdateLanguage(language) => {
                 self.config.language = language;
                 self.chat_widget.set_language(language);
+                self.refresh_status_line();
+            }
+            AppEvent::UpdateSpecParallelPriority(enabled) => {
+                self.config.spec.parallel_priority = enabled;
+                self.chat_widget.set_spec_parallel_priority(enabled);
+            }
+            AppEvent::UpdateCollaborationMode(mask) => {
+                self.chat_widget.set_collaboration_mask(mask);
+                self.refresh_status_line();
+            }
+            AppEvent::UpdatePersonality(personality) => {
+                self.on_update_personality(personality);
             }
             AppEvent::OpenReasoningPopup { model } => {
                 self.chat_widget.open_reasoning_popup(model);
@@ -1846,6 +1862,9 @@ impl App {
                                         summary: None,
                                         collaboration_mode: None,
                                         personality: None,
+                                        spec_parallel_priority: None,
+
+                                        spec_sdd_planning: None,
                                     },
                                 ));
                                 self.app_event_tx.send(
@@ -1868,25 +1887,26 @@ impl App {
                                         summary: None,
                                         collaboration_mode: None,
                                         personality: None,
+                                        spec_parallel_priority: None,
+
+                                        spec_sdd_planning: None,
                                     },
                                 ));
                                 self.app_event_tx
                                     .send(AppEvent::UpdateAskForApprovalPolicy(preset.approval));
                                 self.app_event_tx
                                     .send(AppEvent::UpdateSandboxPolicy(preset.sandbox.clone()));
-                                let message = match mode {
-                                    WindowsSandboxEnableMode::Elevated => tr(
-                                        self.config.language,
-                                        "app.windows_sandbox.enabled_elevated",
-                                    )
-                                    .to_string(),
-                                    WindowsSandboxEnableMode::Legacy => tr(
-                                        self.config.language,
-                                        "app.windows_sandbox.enabled_non_elevated",
-                                    )
-                                    .to_string(),
-                                };
-                                self.chat_widget.add_info_message(message, None);
+                                self.chat_widget.add_info_message(
+                                    match mode {
+                                        WindowsSandboxEnableMode::Elevated => {
+                                            "Enabled elevated agent sandbox.".to_string()
+                                        }
+                                        WindowsSandboxEnableMode::Legacy => {
+                                            "Enabled non-elevated agent sandbox.".to_string()
+                                        }
+                                    },
+                                    None,
+                                );
                             }
                         }
                         Err(err) => {
@@ -1894,12 +1914,9 @@ impl App {
                                 error = %err,
                                 "failed to enable Windows sandbox feature"
                             );
-                            let message = tr_args(
-                                self.config.language,
-                                "app.windows_sandbox.enable_failed",
-                                &[("error", &err.to_string())],
-                            );
-                            self.chat_widget.add_error_message(message);
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to enable the Windows sandbox feature: {err}"
+                            ));
                         }
                     }
                 }
@@ -1917,24 +1934,15 @@ impl App {
                     .await
                 {
                     Ok(()) => {
-                        let mut message = tr_args(
-                            self.config.language,
-                            "app.model.changed",
-                            &[("model", &model)],
-                        );
-                        if let Some(label) =
-                            Self::reasoning_label_for(&model, effort, self.config.language)
-                        {
-                            message
-                                .push_str(tr(self.config.language, "app.model.effort_separator"));
+                        let mut message = format!("Model changed to {model}");
+                        if let Some(label) = Self::reasoning_label_for(&model, effort) {
+                            message.push(' ');
                             message.push_str(label);
                         }
                         if let Some(profile) = profile {
-                            message.push_str(&tr_args(
-                                self.config.language,
-                                "app.model.profile_suffix",
-                                &[("profile", profile)],
-                            ));
+                            message.push_str(" for ");
+                            message.push_str(profile);
+                            message.push_str(" profile");
                         }
                         self.chat_widget.add_info_message(message, None);
                     }
@@ -1943,74 +1951,51 @@ impl App {
                             error = %err,
                             "failed to persist model selection"
                         );
-                        let message = if let Some(profile) = profile {
-                            tr_args(
-                                self.config.language,
-                                "app.model.save_profile_failed",
-                                &[("profile", profile), ("error", &err.to_string())],
-                            )
+                        if let Some(profile) = profile {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save model for profile `{profile}`: {err}"
+                            ));
                         } else {
-                            tr_args(
-                                self.config.language,
-                                "app.model.save_default_failed",
-                                &[("error", &err.to_string())],
-                            )
-                        };
-                        self.chat_widget.add_error_message(message);
+                            self.chat_widget
+                                .add_error_message(format!("Failed to save default model: {err}"));
+                        }
                     }
                 }
             }
             AppEvent::PersistLanguageSelection { language } => {
-                match ConfigEditsBuilder::new(&self.config.codex_home)
+                if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
                     .set_language(language)
                     .apply()
                     .await
                 {
-                    Ok(()) => {
-                        let label = language_name(language, language);
-                        let message =
-                            tr_args(language, "app.language.changed", &[("label", label)]);
-                        self.chat_widget.add_info_message(message, None);
-                    }
-                    Err(err) => {
-                        tracing::error!(
-                            error = %err,
-                            "failed to persist language selection"
-                        );
-                        let message = tr_args(
-                            language,
-                            "app.language.save_failed",
-                            &[("error", &err.to_string())],
-                        );
-                        self.chat_widget.add_error_message(message);
-                    }
+                    tracing::error!(error = %err, "failed to persist language selection");
+                }
+            }
+            AppEvent::PersistSpecParallelPriority { enabled } => {
+                if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(self.active_profile.as_deref())
+                    .set_spec_parallel_priority(enabled)
+                    .apply()
+                    .await
+                {
+                    tracing::error!(
+                        error = %err,
+                        "failed to persist parallel priority spec selection"
+                    );
                 }
             }
             AppEvent::PersistApprovalSelection {
                 approval_policy,
                 sandbox_mode,
             } => {
-                let profile = self.active_profile.as_deref();
-                match ConfigEditsBuilder::new(&self.config.codex_home)
-                    .with_profile(profile)
+                if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(self.active_profile.as_deref())
                     .set_approval_policy(approval_policy)
                     .set_sandbox_mode(sandbox_mode)
                     .apply()
                     .await
                 {
-                    Ok(()) => {}
-                    Err(err) => {
-                        tracing::error!(
-                            error = %err,
-                            "failed to persist approval selection"
-                        );
-                        let message = tr_args(
-                            self.config.language,
-                            "app.approvals.save_failed",
-                            &[("error", &err.to_string())],
-                        );
-                        self.chat_widget.add_error_message(message);
-                    }
+                    tracing::error!(error = %err, "failed to persist approval selection");
                 }
             }
             AppEvent::PersistPersonalitySelection { personality } => {
@@ -2052,12 +2037,8 @@ impl App {
                 self.runtime_approval_policy_override = Some(policy);
                 if let Err(err) = self.config.approval_policy.set(policy) {
                     tracing::warn!(%err, "failed to set approval policy on app config");
-                    let message = tr_args(
-                        self.config.language,
-                        "app.approvals.policy_failed",
-                        &[("error", &err.to_string())],
-                    );
-                    self.chat_widget.add_error_message(message);
+                    self.chat_widget
+                        .add_error_message(format!("Failed to set approval policy: {err}"));
                     return Ok(AppRunControl::Continue);
                 }
                 self.chat_widget.set_approval_policy(policy);
@@ -2072,12 +2053,8 @@ impl App {
 
                 if let Err(err) = self.config.sandbox_policy.set(policy.clone()) {
                     tracing::warn!(%err, "failed to set sandbox policy on app config");
-                    let message = tr_args(
-                        self.config.language,
-                        "app.sandbox.policy_failed",
-                        &[("error", &err.to_string())],
-                    );
-                    self.chat_widget.add_error_message(message);
+                    self.chat_widget
+                        .add_error_message(format!("Failed to set sandbox policy: {err}"));
                     return Ok(AppRunControl::Continue);
                 }
                 #[cfg(target_os = "windows")]
@@ -2089,12 +2066,8 @@ impl App {
                 }
                 if let Err(err) = self.chat_widget.set_sandbox_policy(policy) {
                     tracing::warn!(%err, "failed to set sandbox policy on chat config");
-                    let message = tr_args(
-                        self.config.language,
-                        "app.sandbox.policy_failed",
-                        &[("error", &err.to_string())],
-                    );
-                    self.chat_widget.add_error_message(message);
+                    self.chat_widget
+                        .add_error_message(format!("Failed to set sandbox policy: {err}"));
                     return Ok(AppRunControl::Continue);
                 }
                 self.runtime_sandbox_policy_override =
@@ -2180,15 +2153,16 @@ impl App {
                                 summary: None,
                                 collaboration_mode: None,
                                 personality: None,
+                                spec_parallel_priority: None,
+
+                                spec_sdd_planning: None,
                             }));
                     }
                 }
                 if let Err(err) = builder.apply().await {
                     tracing::error!(error = %err, "failed to persist feature flags");
-                    self.chat_widget.add_error_message(tr_args(
-                        self.config.language,
-                        "app.features.save_failed",
-                        &[("error", &err.to_string())],
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to update experimental features: {err}"
                     ));
                 }
             }
@@ -2215,10 +2189,8 @@ impl App {
                         error = %err,
                         "failed to persist full access warning acknowledgement"
                     );
-                    self.chat_widget.add_error_message(tr_args(
-                        self.config.language,
-                        "app.full_access.save_pref_failed",
-                        &[("error", &err.to_string())],
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to save full access confirmation preference: {err}"
                     ));
                 }
             }
@@ -2232,10 +2204,8 @@ impl App {
                         error = %err,
                         "failed to persist world-writable warning acknowledgement"
                     );
-                    self.chat_widget.add_error_message(tr_args(
-                        self.config.language,
-                        "app.world_writable.save_pref_failed",
-                        &[("error", &err.to_string())],
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to save Agent mode warning preference: {err}"
                     ));
                 }
             }
@@ -2249,10 +2219,8 @@ impl App {
                         error = %err,
                         "failed to persist rate limit switch prompt preference"
                     );
-                    self.chat_widget.add_error_message(tr_args(
-                        self.config.language,
-                        "app.rate_limit.save_pref_failed",
-                        &[("error", &err.to_string())],
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to save rate limit reminder preference: {err}"
                     ));
                 }
             }
@@ -2269,10 +2237,8 @@ impl App {
                         error = %err,
                         "failed to persist model migration prompt acknowledgement"
                     );
-                    self.chat_widget.add_error_message(tr_args(
-                        self.config.language,
-                        "app.model_migration.save_pref_failed",
-                        &[("error", &err.to_string())],
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to save model migration prompt preference: {err}"
                     ));
                 }
             }
@@ -2280,7 +2246,7 @@ impl App {
                 self.chat_widget.open_approvals_popup();
             }
             AppEvent::OpenAgentPicker => {
-                self.open_agent_picker();
+                self.open_agent_picker().await;
             }
             AppEvent::SelectAgentThread(thread_id) => {
                 self.select_agent_thread(tui, thread_id).await?;
@@ -2340,7 +2306,7 @@ impl App {
                     let diff_summary = DiffSummary::new(changes, cwd);
                     self.overlay = Some(Overlay::new_static_with_renderables(
                         vec![diff_summary.into()],
-                        tr(self.config.language, "app.overlay.patch_title").to_string(),
+                        "P A T C H".to_string(),
                         self.config.language,
                     ));
                 }
@@ -2350,7 +2316,7 @@ impl App {
                     let full_cmd_lines = highlight_bash_to_lines(&full_cmd);
                     self.overlay = Some(Overlay::new_static_with_lines(
                         full_cmd_lines,
-                        tr(self.config.language, "app.overlay.command_title").to_string(),
+                        "E X E C".to_string(),
                         self.config.language,
                     ));
                 }
@@ -2368,31 +2334,54 @@ impl App {
                     .wrap(Wrap { trim: false });
                     self.overlay = Some(Overlay::new_static_with_renderables(
                         vec![Box::new(paragraph)],
-                        tr(self.config.language, "app.overlay.elicitation_title").to_string(),
+                        "E L I C I T A T I O N".to_string(),
                         self.config.language,
                     ));
                 }
             },
+            AppEvent::StatusLineSetup { items } => {
+                let ids = items.iter().map(ToString::to_string).collect::<Vec<_>>();
+                let edit = codex_core::config::edit::status_line_items_edit(&ids);
+                let apply_result = ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_edits([edit])
+                    .apply()
+                    .await;
+                match apply_result {
+                    Ok(()) => {
+                        self.config.tui_status_line = if ids.is_empty() {
+                            None
+                        } else {
+                            Some(ids.clone())
+                        };
+                        self.chat_widget.setup_status_line(items);
+                    }
+                    Err(err) => {
+                        tracing::error!(error = %err, "failed to persist status line items; keeping previous selection");
+                        let error = err.to_string();
+                        self.chat_widget.add_error_message(tr_args(
+                            self.config.language,
+                            "status_line_setup.save_failed",
+                            &[("error", error.as_str())],
+                        ));
+                    }
+                }
+            }
+            AppEvent::StatusLineBranchUpdated { cwd, branch } => {
+                self.chat_widget.set_status_line_branch(cwd, branch);
+                self.refresh_status_line();
+            }
+            AppEvent::StatusLineSetupCancelled => {
+                self.chat_widget.cancel_status_line_setup();
+            }
         }
         Ok(AppRunControl::Continue)
     }
 
-    fn reasoning_label(
-        reasoning_effort: Option<ReasoningEffortConfig>,
-        language: Language,
-    ) -> &'static str {
-        let key = match reasoning_effort {
-            Some(ReasoningEffortConfig::Minimal) => "app.reasoning.minimal",
-            Some(ReasoningEffortConfig::Low) => "app.reasoning.low",
-            Some(ReasoningEffortConfig::Medium) => "app.reasoning.medium",
-            Some(ReasoningEffortConfig::High) => "app.reasoning.high",
-            Some(ReasoningEffortConfig::XHigh) => "app.reasoning.xhigh",
-            None | Some(ReasoningEffortConfig::None) => "app.reasoning.default",
-        };
-        tr(language, key)
-    }
-
     fn handle_codex_event_now(&mut self, event: Event) {
+        let needs_refresh = matches!(
+            event.msg,
+            EventMsg::SessionConfigured(_) | EventMsg::TokenCount(_)
+        );
         if self.suppress_shutdown_complete && matches!(event.msg, EventMsg::ShutdownComplete) {
             self.suppress_shutdown_complete = false;
             return;
@@ -2400,14 +2389,17 @@ impl App {
         if let EventMsg::ListSkillsResponse(response) = &event.msg {
             let cwd = self.chat_widget.config_ref().cwd.clone();
             let errors = errors_for_cwd(&cwd, response);
-            emit_skill_load_warnings(&self.app_event_tx, &errors, self.config.language);
+            emit_skill_load_warnings(&self.app_event_tx, &errors);
         }
         self.handle_backtrack_event(&event.msg);
         self.chat_widget.handle_codex_event(event);
+
+        if needs_refresh {
+            self.refresh_status_line();
+        }
     }
 
     fn handle_codex_event_replay(&mut self, event: Event) {
-        self.handle_backtrack_event(&event.msg);
         self.chat_widget.handle_codex_event_replay(event);
     }
 
@@ -2446,6 +2438,7 @@ impl App {
                 history_log_id: 0,
                 history_entry_count: 0,
                 initial_messages: None,
+                network_proxy: None,
                 rollout_path: thread.rollout_path(),
             }),
         };
@@ -2477,13 +2470,22 @@ impl App {
         Ok(())
     }
 
+    fn reasoning_label(reasoning_effort: Option<ReasoningEffortConfig>) -> &'static str {
+        match reasoning_effort {
+            Some(ReasoningEffortConfig::Minimal) => "minimal",
+            Some(ReasoningEffortConfig::Low) => "low",
+            Some(ReasoningEffortConfig::Medium) => "medium",
+            Some(ReasoningEffortConfig::High) => "high",
+            Some(ReasoningEffortConfig::XHigh) => "xhigh",
+            None | Some(ReasoningEffortConfig::None) => "default",
+        }
+    }
+
     fn reasoning_label_for(
         model: &str,
         reasoning_effort: Option<ReasoningEffortConfig>,
-        language: Language,
     ) -> Option<&'static str> {
-        (!model.starts_with("codex-auto-"))
-            .then(|| Self::reasoning_label(reasoning_effort, language))
+        (!model.starts_with("codex-auto-")).then(|| Self::reasoning_label(reasoning_effort))
     }
 
     pub(crate) fn token_usage(&self) -> codex_core::protocol::TokenUsage {
@@ -2547,11 +2549,9 @@ impl App {
                 self.chat_widget.apply_external_edit(cleaned);
             }
             Err(err) => {
-                let language = self.chat_widget.config_ref().language;
                 self.chat_widget
                     .add_to_history(history_cell::new_error_event(format!(
-                        "{}{err}",
-                        tr(language, "app.editor.open_failed"),
+                        "Failed to open editor: {err}",
                     )));
             }
         }
@@ -2562,7 +2562,7 @@ impl App {
         self.chat_widget
             .set_external_editor_state(ExternalEditorState::Requested);
         self.chat_widget.set_footer_hint_override(Some(vec![(
-            external_editor_hint(self.chat_widget.config_ref().language).to_string(),
+            EXTERNAL_EDITOR_HINT.to_string(),
             String::new(),
         )]));
         tui.frame_requester().schedule_frame();
@@ -2654,6 +2654,10 @@ impl App {
         };
     }
 
+    fn refresh_status_line(&mut self) {
+        self.chat_widget.refresh_status_line();
+    }
+
     #[cfg(target_os = "windows")]
     fn spawn_world_writable_scan(
         cwd: PathBuf,
@@ -2706,6 +2710,8 @@ mod tests {
     use codex_core::protocol::SandboxPolicy;
     use codex_core::protocol::SessionConfiguredEvent;
     use codex_core::protocol::SessionSource;
+    use codex_core::protocol::ThreadRolledBackEvent;
+    use codex_core::protocol::UserMessageEvent;
     use codex_otel::OtelManager;
     use codex_protocol::ThreadId;
     use codex_protocol::user_input::TextElement;
@@ -2778,6 +2784,19 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn open_agent_picker_prunes_missing_threads() -> Result<()> {
+        let mut app = make_test_app().await;
+        let thread_id = ThreadId::new();
+        app.thread_event_channels
+            .insert(thread_id, ThreadEventChannel::new(1));
+
+        app.open_agent_picker().await;
+
+        assert_eq!(app.thread_event_channels.contains_key(&thread_id), false);
+        Ok(())
+    }
+
     async fn make_test_app() -> App {
         let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
@@ -2810,6 +2829,7 @@ mod tests {
             has_emitted_history_lines: false,
             enhanced_keys_supported: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
+            status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
             backtrack_render_pending: false,
             feedback: codex_feedback::CodexFeedback::new(),
@@ -2863,6 +2883,7 @@ mod tests {
                 has_emitted_history_lines: false,
                 enhanced_keys_supported: false,
                 commit_anim_running: Arc::new(AtomicBool::new(false)),
+                status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
                 backtrack: BacktrackState::default(),
                 backtrack_render_pending: false,
                 feedback: codex_feedback::CodexFeedback::new(),
@@ -2891,6 +2912,7 @@ mod tests {
             None,
             None,
             None,
+            "test_originator".to_string(),
             false,
             "test".to_string(),
             SessionSource::Cli,
@@ -3112,6 +3134,7 @@ mod tests {
                 history_log_id: 0,
                 history_entry_count: 0,
                 initial_messages: None,
+                network_proxy: None,
                 rollout_path: Some(PathBuf::new()),
             };
             Arc::new(new_session_info(
@@ -3166,6 +3189,7 @@ mod tests {
                 history_log_id: 0,
                 history_entry_count: 0,
                 initial_messages: None,
+                network_proxy: None,
                 rollout_path: Some(PathBuf::new()),
             }),
         });
@@ -3195,6 +3219,214 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn replayed_initial_messages_apply_rollback_in_queue_order() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+
+        let session_id = ThreadId::new();
+        app.handle_codex_event_replay(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id,
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::ReadOnly,
+                cwd: PathBuf::from("/home/user/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: Some(vec![
+                    EventMsg::UserMessage(UserMessageEvent {
+                        message: "first prompt".to_string(),
+                        images: None,
+                        local_images: Vec::new(),
+                        text_elements: Vec::new(),
+                    }),
+                    EventMsg::UserMessage(UserMessageEvent {
+                        message: "second prompt".to_string(),
+                        images: None,
+                        local_images: Vec::new(),
+                        text_elements: Vec::new(),
+                    }),
+                    EventMsg::ThreadRolledBack(ThreadRolledBackEvent { num_turns: 1 }),
+                    EventMsg::UserMessage(UserMessageEvent {
+                        message: "third prompt".to_string(),
+                        images: None,
+                        local_images: Vec::new(),
+                        text_elements: Vec::new(),
+                    }),
+                ]),
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            }),
+        });
+
+        let mut saw_rollback = false;
+        while let Ok(event) = app_event_rx.try_recv() {
+            match event {
+                AppEvent::InsertHistoryCell(cell) => {
+                    let cell: Arc<dyn HistoryCell> = cell.into();
+                    app.transcript_cells.push(cell);
+                }
+                AppEvent::ApplyThreadRollback { num_turns } => {
+                    saw_rollback = true;
+                    crate::app_backtrack::trim_transcript_cells_drop_last_n_user_turns(
+                        &mut app.transcript_cells,
+                        num_turns,
+                    );
+                }
+                _ => {}
+            }
+        }
+
+        assert!(saw_rollback);
+        let user_messages: Vec<String> = app
+            .transcript_cells
+            .iter()
+            .filter_map(|cell| {
+                cell.as_any()
+                    .downcast_ref::<UserHistoryCell>()
+                    .map(|cell| cell.message.clone())
+            })
+            .collect();
+        assert_eq!(
+            user_messages,
+            vec!["first prompt".to_string(), "third prompt".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn live_rollback_during_replay_is_applied_in_app_event_order() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+
+        let session_id = ThreadId::new();
+        app.handle_codex_event_replay(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id,
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::ReadOnly,
+                cwd: PathBuf::from("/home/user/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: Some(vec![
+                    EventMsg::UserMessage(UserMessageEvent {
+                        message: "first prompt".to_string(),
+                        images: None,
+                        local_images: Vec::new(),
+                        text_elements: Vec::new(),
+                    }),
+                    EventMsg::UserMessage(UserMessageEvent {
+                        message: "second prompt".to_string(),
+                        images: None,
+                        local_images: Vec::new(),
+                        text_elements: Vec::new(),
+                    }),
+                ]),
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            }),
+        });
+
+        // Simulate a live rollback arriving before queued replay inserts are drained.
+        app.handle_codex_event_now(Event {
+            id: "live-rollback".to_string(),
+            msg: EventMsg::ThreadRolledBack(ThreadRolledBackEvent { num_turns: 1 }),
+        });
+
+        let mut saw_rollback = false;
+        while let Ok(event) = app_event_rx.try_recv() {
+            match event {
+                AppEvent::InsertHistoryCell(cell) => {
+                    let cell: Arc<dyn HistoryCell> = cell.into();
+                    app.transcript_cells.push(cell);
+                }
+                AppEvent::ApplyThreadRollback { num_turns } => {
+                    saw_rollback = true;
+                    crate::app_backtrack::trim_transcript_cells_drop_last_n_user_turns(
+                        &mut app.transcript_cells,
+                        num_turns,
+                    );
+                }
+                _ => {}
+            }
+        }
+
+        assert!(saw_rollback);
+        let user_messages: Vec<String> = app
+            .transcript_cells
+            .iter()
+            .filter_map(|cell| {
+                cell.as_any()
+                    .downcast_ref::<UserHistoryCell>()
+                    .map(|cell| cell.message.clone())
+            })
+            .collect();
+        assert_eq!(user_messages, vec!["first prompt".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn queued_rollback_syncs_overlay_and_clears_deferred_history() {
+        let mut app = make_test_app().await;
+        app.transcript_cells = vec![
+            Arc::new(UserHistoryCell {
+                message: "first".to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+            }) as Arc<dyn HistoryCell>,
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from("after first")],
+                false,
+            )) as Arc<dyn HistoryCell>,
+            Arc::new(UserHistoryCell {
+                message: "second".to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+            }) as Arc<dyn HistoryCell>,
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from("after second")],
+                false,
+            )) as Arc<dyn HistoryCell>,
+        ];
+        app.overlay = Some(Overlay::new_transcript(
+            app.transcript_cells.clone(),
+            app.config.language,
+        ));
+        app.deferred_history_lines = vec![Line::from("stale buffered line")];
+        app.backtrack.overlay_preview_active = true;
+        app.backtrack.nth_user_message = 1;
+
+        let changed = app.apply_non_pending_thread_rollback(1);
+
+        assert!(changed);
+        assert!(app.backtrack_render_pending);
+        assert!(app.deferred_history_lines.is_empty());
+        assert_eq!(app.backtrack.nth_user_message, 0);
+        let user_messages: Vec<String> = app
+            .transcript_cells
+            .iter()
+            .filter_map(|cell| {
+                cell.as_any()
+                    .downcast_ref::<UserHistoryCell>()
+                    .map(|cell| cell.message.clone())
+            })
+            .collect();
+        assert_eq!(user_messages, vec!["first".to_string()]);
+        let overlay_cell_count = match app.overlay.as_ref() {
+            Some(Overlay::Transcript(t)) => t.committed_cell_count(),
+            _ => panic!("expected transcript overlay"),
+        };
+        assert_eq!(overlay_cell_count, app.transcript_cells.len());
+    }
+
+    #[tokio::test]
     async fn new_session_requests_shutdown_for_previous_conversation() {
         let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
 
@@ -3212,6 +3444,7 @@ mod tests {
             history_log_id: 0,
             history_entry_count: 0,
             initial_messages: None,
+            network_proxy: None,
             rollout_path: Some(PathBuf::new()),
         };
 

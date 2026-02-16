@@ -142,7 +142,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             ApiVersion::V1 => {
                 let params = ApplyPatchApprovalParams {
                     conversation_id,
-                    call_id,
+                    call_id: call_id.clone(),
                     file_changes: changes.clone(),
                     reason,
                     grant_root,
@@ -151,7 +151,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .send_request(ServerRequestPayload::ApplyPatchApproval(params))
                     .await;
                 tokio::spawn(async move {
-                    on_patch_approval_response(event_turn_id, rx, conversation).await;
+                    on_patch_approval_response(call_id, rx, conversation).await;
                 });
             }
             ApiVersion::V2 => {
@@ -218,7 +218,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             ApiVersion::V1 => {
                 let params = ExecCommandApprovalParams {
                     conversation_id,
-                    call_id,
+                    call_id: call_id.clone(),
                     command,
                     cwd,
                     reason,
@@ -228,7 +228,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .send_request(ServerRequestPayload::ExecCommandApproval(params))
                     .await;
                 tokio::spawn(async move {
-                    on_exec_approval_response(event_turn_id, rx, conversation).await;
+                    on_exec_approval_response(call_id, event_turn_id, rx, conversation).await;
                 });
             }
             ApiVersion::V2 => {
@@ -589,6 +589,28 @@ pub(crate) async fn apply_bespoke_event_handling(
                 prompt: None,
                 agents_states,
             };
+            let notification = ItemCompletedNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
+                item,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::ItemCompleted(notification))
+                .await;
+        }
+        EventMsg::CollabResumeBegin(begin_event) => {
+            let item = collab_resume_begin_item(begin_event);
+            let notification = ItemStartedNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
+                item,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::ItemStarted(notification))
+                .await;
+        }
+        EventMsg::CollabResumeEnd(end_event) => {
+            let item = collab_resume_end_item(end_event);
             let notification = ItemCompletedNotification {
                 thread_id: conversation_id.to_string(),
                 turn_id: event_turn_id.clone(),
@@ -1408,7 +1430,7 @@ async fn handle_error(
 }
 
 async fn on_patch_approval_response(
-    event_turn_id: String,
+    call_id: String,
     receiver: oneshot::Receiver<JsonValue>,
     codex: Arc<CodexThread>,
 ) {
@@ -1419,7 +1441,7 @@ async fn on_patch_approval_response(
             error!("request failed: {err:?}");
             if let Err(submit_err) = codex
                 .submit(Op::PatchApproval {
-                    id: event_turn_id.clone(),
+                    id: call_id.clone(),
                     decision: ReviewDecision::Denied,
                 })
                 .await
@@ -1440,7 +1462,7 @@ async fn on_patch_approval_response(
 
     if let Err(err) = codex
         .submit(Op::PatchApproval {
-            id: event_turn_id,
+            id: call_id,
             decision: response.decision,
         })
         .await
@@ -1450,7 +1472,8 @@ async fn on_patch_approval_response(
 }
 
 async fn on_exec_approval_response(
-    event_turn_id: String,
+    call_id: String,
+    turn_id: String,
     receiver: oneshot::Receiver<JsonValue>,
     conversation: Arc<CodexThread>,
 ) {
@@ -1476,7 +1499,8 @@ async fn on_exec_approval_response(
 
     if let Err(err) = conversation
         .submit(Op::ExecApproval {
-            id: event_turn_id,
+            id: call_id,
+            turn_id: Some(turn_id),
             decision: response.decision,
         })
         .await
@@ -1658,7 +1682,7 @@ async fn on_file_change_request_approval_response(
     if let Some(status) = completion_status {
         complete_file_change_item(
             conversation_id,
-            item_id,
+            item_id.clone(),
             changes,
             status,
             event_turn_id.clone(),
@@ -1670,7 +1694,7 @@ async fn on_file_change_request_approval_response(
 
     if let Err(err) = codex
         .submit(Op::PatchApproval {
-            id: event_turn_id,
+            id: item_id,
             decision,
         })
         .await
@@ -1751,12 +1775,51 @@ async fn on_command_execution_request_approval_response(
 
     if let Err(err) = conversation
         .submit(Op::ExecApproval {
-            id: event_turn_id,
+            id: item_id,
+            turn_id: Some(event_turn_id),
             decision,
         })
         .await
     {
         error!("failed to submit ExecApproval: {err}");
+    }
+}
+
+fn collab_resume_begin_item(
+    begin_event: codex_core::protocol::CollabResumeBeginEvent,
+) -> ThreadItem {
+    ThreadItem::CollabAgentToolCall {
+        id: begin_event.call_id,
+        tool: CollabAgentTool::ResumeAgent,
+        status: V2CollabToolCallStatus::InProgress,
+        sender_thread_id: begin_event.sender_thread_id.to_string(),
+        receiver_thread_ids: vec![begin_event.receiver_thread_id.to_string()],
+        prompt: None,
+        agents_states: HashMap::new(),
+    }
+}
+
+fn collab_resume_end_item(end_event: codex_core::protocol::CollabResumeEndEvent) -> ThreadItem {
+    let status = match &end_event.status {
+        codex_protocol::protocol::AgentStatus::Errored(_)
+        | codex_protocol::protocol::AgentStatus::NotFound => V2CollabToolCallStatus::Failed,
+        _ => V2CollabToolCallStatus::Completed,
+    };
+    let receiver_id = end_event.receiver_thread_id.to_string();
+    let agents_states = [(
+        receiver_id.clone(),
+        V2CollabAgentStatus::from(end_event.status),
+    )]
+    .into_iter()
+    .collect();
+    ThreadItem::CollabAgentToolCall {
+        id: end_event.call_id,
+        tool: CollabAgentTool::ResumeAgent,
+        status,
+        sender_thread_id: end_event.sender_thread_id.to_string(),
+        receiver_thread_ids: vec![receiver_id],
+        prompt: None,
+        agents_states,
     }
 }
 
@@ -1839,6 +1902,8 @@ mod tests {
     use anyhow::anyhow;
     use anyhow::bail;
     use codex_app_server_protocol::TurnPlanStepStatus;
+    use codex_core::protocol::CollabResumeBeginEvent;
+    use codex_core::protocol::CollabResumeEndEvent;
     use codex_core::protocol::CreditsSnapshot;
     use codex_core::protocol::McpInvocation;
     use codex_core::protocol::RateLimitSnapshot;
@@ -1866,6 +1931,55 @@ mod tests {
             map_file_change_approval_decision(FileChangeApprovalDecision::AcceptForSession);
         assert_eq!(decision, ReviewDecision::ApprovedForSession);
         assert_eq!(completion_status, None);
+    }
+
+    #[test]
+    fn collab_resume_begin_maps_to_item_started_resume_agent() {
+        let event = CollabResumeBeginEvent {
+            call_id: "call-1".to_string(),
+            sender_thread_id: ThreadId::new(),
+            receiver_thread_id: ThreadId::new(),
+        };
+
+        let item = collab_resume_begin_item(event.clone());
+        let expected = ThreadItem::CollabAgentToolCall {
+            id: event.call_id,
+            tool: CollabAgentTool::ResumeAgent,
+            status: V2CollabToolCallStatus::InProgress,
+            sender_thread_id: event.sender_thread_id.to_string(),
+            receiver_thread_ids: vec![event.receiver_thread_id.to_string()],
+            prompt: None,
+            agents_states: HashMap::new(),
+        };
+        assert_eq!(item, expected);
+    }
+
+    #[test]
+    fn collab_resume_end_maps_to_item_completed_resume_agent() {
+        let event = CollabResumeEndEvent {
+            call_id: "call-2".to_string(),
+            sender_thread_id: ThreadId::new(),
+            receiver_thread_id: ThreadId::new(),
+            status: codex_protocol::protocol::AgentStatus::NotFound,
+        };
+
+        let item = collab_resume_end_item(event.clone());
+        let receiver_id = event.receiver_thread_id.to_string();
+        let expected = ThreadItem::CollabAgentToolCall {
+            id: event.call_id,
+            tool: CollabAgentTool::ResumeAgent,
+            status: V2CollabToolCallStatus::Failed,
+            sender_thread_id: event.sender_thread_id.to_string(),
+            receiver_thread_ids: vec![receiver_id.clone()],
+            prompt: None,
+            agents_states: [(
+                receiver_id,
+                V2CollabAgentStatus::from(codex_protocol::protocol::AgentStatus::NotFound),
+            )]
+            .into_iter()
+            .collect(),
+        };
+        assert_eq!(item, expected);
     }
 
     #[tokio::test]

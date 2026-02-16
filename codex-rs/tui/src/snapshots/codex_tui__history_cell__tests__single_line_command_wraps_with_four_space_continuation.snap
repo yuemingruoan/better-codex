@@ -2,8 +2,7 @@
 source: tui/src/history_cell.rs
 expression: rendered
 ---
-• 已运行 a_very_long_tok
-  │ en_without_spac
-  │ es_to_force_wra
-  │ … +1 行
-  └ （无输出）
+• Ran a_very_long_token_
+  │ without_spaces_to_
+  │ force_wrapping
+  └ (no output)

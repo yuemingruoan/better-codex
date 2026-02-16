@@ -75,6 +75,9 @@ async fn sdd_git_action_create_branch_dispatches() -> Result<()> {
             summary: None,
             collaboration_mode: None,
             personality: None,
+            spec_parallel_priority: None,
+
+            spec_sdd_planning: None,
         })
         .await?;
 
@@ -124,6 +127,9 @@ async fn sdd_git_action_create_branch_uses_non_default_base() -> Result<()> {
             summary: None,
             collaboration_mode: None,
             personality: None,
+            spec_parallel_priority: None,
+
+            spec_sdd_planning: None,
         })
         .await?;
 

@@ -95,3 +95,4 @@ __pycache__/
 *.pyc
 
 .codex
+.codex/checkpoint.md

@@ -2,8 +2,8 @@
 source: tui/src/chatwidget/tests.rs
 expression: combined
 ---
-↳ 与后台终端交互 · just fix
-  └ （等待）
+↳ Interacted with background terminal · just fix
+  └ (waited)
 
-↳ 与后台终端交互 · just fix
+↳ Interacted with background terminal · just fix
   └ ls

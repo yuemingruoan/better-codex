@@ -432,10 +432,30 @@ pub fn all_model_presets() -> &'static Vec<ModelPreset> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
 
     #[test]
     fn only_one_default_model_is_configured() {
         let default_models = PRESETS.iter().filter(|preset| preset.is_default).count();
         assert!(default_models == 1);
+    }
+
+    #[test]
+    fn bundled_models_json_lists_gpt_5_3_codex_in_picker() {
+        let bundled_models: Value =
+            serde_json::from_str(include_str!("../../models.json")).expect("valid models.json");
+        let models = bundled_models
+            .get("models")
+            .and_then(Value::as_array)
+            .expect("models.json contains a models array");
+        let gpt_5_3_codex = models
+            .iter()
+            .find(|model| model.get("slug").and_then(Value::as_str) == Some("gpt-5.3-codex"))
+            .expect("gpt-5.3-codex exists in models.json");
+
+        assert_eq!(
+            gpt_5_3_codex.get("visibility").and_then(Value::as_str),
+            Some("list")
+        );
     }
 }

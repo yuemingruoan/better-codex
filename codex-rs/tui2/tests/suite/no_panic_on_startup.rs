@@ -63,7 +63,14 @@ async fn run_codex_cli(
         codex_home.as_ref().display().to_string(),
     );
 
-    let args = vec!["-c".to_string(), "analytics.enabled=false".to_string()];
+    // Pin to a non-migrating model so startup does not pause on model-migration
+    // UI in PTY test environments.
+    let args = vec![
+        "-c".to_string(),
+        "analytics.enabled=false".to_string(),
+        "-c".to_string(),
+        "model=gpt-5.3-codex".to_string(),
+    ];
     let spawned = codex_utils_pty::spawn_pty_process(
         codex_cli.to_string_lossy().as_ref(),
         &args,
@@ -76,6 +83,7 @@ async fn run_codex_cli(
     let mut output_rx = spawned.output_rx;
     let mut exit_rx = spawned.exit_rx;
     let writer_tx = spawned.session.writer_sender();
+    let mut sent_enter = false;
     let exit_code_result = timeout(Duration::from_secs(10), async {
         // Read PTY output until the process exits while replying to cursor
         // position queries so the TUI can initialize without a real terminal.
@@ -87,6 +95,22 @@ async fn run_codex_cli(
                         // Respond with a valid position to unblock startup.
                         if chunk.windows(4).any(|window| window == b"\x1b[6n") {
                             let _ = writer_tx.send(b"\x1b[1;1R".to_vec()).await;
+                        }
+                        // Some terminals are also queried for device attributes and
+                        // foreground/background colors during startup.
+                        if chunk.windows(3).any(|window| window == b"\x1b[c") {
+                            let _ = writer_tx.send(b"\x1b[?1;2c".to_vec()).await;
+                        }
+                        if chunk.windows(6).any(|window| window == b"\x1b]10;?") {
+                            let _ = writer_tx.send(b"\x1b]10;rgb:ffff/ffff/ffff\x1b\\".to_vec()).await;
+                        }
+                        if chunk.windows(6).any(|window| window == b"\x1b]11;?") {
+                            let _ = writer_tx.send(b"\x1b]11;rgb:0000/0000/0000\x1b\\".to_vec()).await;
+                        }
+                        // The startup error dialog waits for Enter before exiting.
+                        if !sent_enter && chunk.windows(7).any(|window| window == b"\x1b[?1049h") {
+                            let _ = writer_tx.send(b"\r".to_vec()).await;
+                            sent_enter = true;
                         }
                         output.extend_from_slice(&chunk);
                     }

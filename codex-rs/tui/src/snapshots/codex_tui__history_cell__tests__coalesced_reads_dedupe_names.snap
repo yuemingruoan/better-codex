@@ -2,5 +2,5 @@
 source: tui/src/history_cell.rs
 expression: rendered
 ---
-• 已完成
-  └ 读取 auth.rs, shimmer.rs
+• Explored
+  └ Read auth.rs, shimmer.rs

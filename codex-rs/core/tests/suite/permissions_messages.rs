@@ -122,6 +122,9 @@ async fn permissions_message_added_on_override_change() -> Result<()> {
             summary: None,
             collaboration_mode: None,
             personality: None,
+            spec_parallel_priority: None,
+
+            spec_sdd_planning: None,
         })
         .await?;
 
@@ -264,6 +267,9 @@ async fn resume_replays_permissions_messages() -> Result<()> {
             summary: None,
             collaboration_mode: None,
             personality: None,
+            spec_parallel_priority: None,
+
+            spec_sdd_planning: None,
         })
         .await?;
 
@@ -363,6 +369,9 @@ async fn resume_and_fork_append_permissions_messages() -> Result<()> {
             summary: None,
             collaboration_mode: None,
             personality: None,
+            spec_parallel_priority: None,
+
+            spec_sdd_planning: None,
         })
         .await?;
 

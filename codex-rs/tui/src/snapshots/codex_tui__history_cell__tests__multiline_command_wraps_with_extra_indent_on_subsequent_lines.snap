@@ -2,7 +2,7 @@
 source: tui/src/history_cell.rs
 expression: rendered
 ---
-• 已运行 set -o pipefail
+• Ran set -o pipefail
   │ cargo test
   │ --all-features --quiet
-  └ （无输出）
+  └ (no output)

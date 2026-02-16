@@ -32,13 +32,13 @@ expression: term.backend().vt100().screen().contents()
 • I’m going to search the repo for where “Change Approved” is rendered to update
   that view.
 
-• 已完成
-  └ 搜索 Change Approved
-    读取 diff_render.rs
+• Explored
+  └ Search Change Approved
+    Read diff_render.rs
 
-• Investigating rendering code （0秒 • 按 esc 以中断）
+• Investigating rendering code (0s • Press esc to interrupt)
 
 
 › Summarize recent commits
 
-  tab 排队发送                                                   0% 上下文已用
+  tab to queue message                                       100% context left

@@ -1,12 +1,15 @@
 ---
 source: tui/src/chatwidget/tests.rs
+assertion_line: 3092
 expression: popup
 ---
-  选择授权模式
+  Update Model Permissions
 
-› 1. 只读 (current)    编辑文件与运行命令需确认。
-  2. 代理              可读写文件并运行命令。
-  3. 代理（完全访问）  Codex 可编辑工作区外的文件并运行含网络访问的命令。使用
-                       时请谨慎。
+› 1. Default      Codex can read and edit files in the current workspace, and
+                  run commands. Approval is required to access the internet or
+                  edit other files.
+  2. Full Access  Codex can edit files outside this workspace and access the
+                  internet without asking for approval. Exercise caution when
+                  using.
 
-  按 enter 确认，或 esc 返回
+  Press enter to confirm or esc to go back

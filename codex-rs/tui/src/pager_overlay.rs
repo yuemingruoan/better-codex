@@ -563,6 +563,26 @@ impl TranscriptOverlay {
         }
     }
 
+    /// Replace committed transcript cells while keeping any cached in-progress output that is
+    /// currently shown at the end of the overlay.
+    ///
+    /// This is used when existing history is trimmed (for example after rollback) so the
+    /// transcript overlay immediately reflects the same committed cells as the main transcript.
+    pub(crate) fn replace_cells(&mut self, cells: Vec<Arc<dyn HistoryCell>>) {
+        let follow_bottom = self.view.is_scrolled_to_bottom();
+        self.cells = cells;
+        if self
+            .highlight_cell
+            .is_some_and(|idx| idx >= self.cells.len())
+        {
+            self.highlight_cell = None;
+        }
+        self.rebuild_renderables();
+        if follow_bottom {
+            self.view.scroll_offset = usize::MAX;
+        }
+    }
+
     /// Sync the active-cell live tail with the current width and cell state.
     ///
     /// Recomputes the tail only when the cache key changes, preserving scroll
@@ -717,6 +737,11 @@ impl TranscriptOverlay {
     }
     pub(crate) fn is_done(&self) -> bool {
         self.is_done
+    }
+
+    #[cfg(test)]
+    pub(crate) fn committed_cell_count(&self) -> usize {
+        self.cells.len()
     }
 }
 
@@ -1018,8 +1043,7 @@ mod tests {
                 content: "hello\nworld\n".to_string(),
             },
         );
-        let approval_cell: Arc<dyn HistoryCell> =
-            Arc::new(new_patch_event(approval_changes, &cwd, Language::En));
+        let approval_cell: Arc<dyn HistoryCell> = Arc::new(new_patch_event(approval_changes, &cwd));
         cells.push(approval_cell);
 
         let mut apply_changes = HashMap::new();
@@ -1029,16 +1053,12 @@ mod tests {
                 content: "hello\nworld\n".to_string(),
             },
         );
-        let apply_begin_cell: Arc<dyn HistoryCell> =
-            Arc::new(new_patch_event(apply_changes, &cwd, Language::En));
+        let apply_begin_cell: Arc<dyn HistoryCell> = Arc::new(new_patch_event(apply_changes, &cwd));
         cells.push(apply_begin_cell);
 
-        let apply_end_cell: Arc<dyn HistoryCell> = history_cell::new_approval_decision_cell(
-            vec!["ls".into()],
-            ReviewDecision::Approved,
-            Language::ZhCn,
-        )
-        .into();
+        let apply_end_cell: Arc<dyn HistoryCell> =
+            history_cell::new_approval_decision_cell(vec!["ls".into()], ReviewDecision::Approved)
+                .into();
         cells.push(apply_end_cell);
 
         let mut exec_cell = crate::exec_cell::new_active_exec_command(

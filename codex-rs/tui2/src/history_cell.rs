@@ -572,7 +572,7 @@ impl HistoryCell for UpdateAvailableHistoryCell {
         } else {
             line![
                 tr(self.language, "history.update.visit_prefix"),
-                "https://github.com/yuemingruoan/better-chinese-codex/releases"
+                "https://github.com/yuemingruoan/better-codex/releases"
                     .cyan()
                     .underlined(),
                 tr(self.language, "history.update.download_suffix")
@@ -589,7 +589,7 @@ impl HistoryCell for UpdateAvailableHistoryCell {
             update_instruction,
             "",
             tr(self.language, "history.update.release_notes"),
-            "https://github.com/yuemingruoan/better-chinese-codex/releases/latest"
+            "https://github.com/yuemingruoan/better-codex/releases/latest"
                 .cyan()
                 .underlined(),
         ];
@@ -2139,10 +2139,13 @@ mod tests {
                 cwd: None,
             },
             enabled: true,
+            required: false,
+            disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
             enabled_tools: None,
             disabled_tools: None,
+            scopes: None,
         };
         let mut servers = config.mcp_servers.get().clone();
         servers.insert("docs".to_string(), stdio_config);
@@ -2159,10 +2162,13 @@ mod tests {
                 env_http_headers: Some(env_headers),
             },
             enabled: true,
+            required: false,
+            disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
             enabled_tools: None,
             disabled_tools: None,
+            scopes: None,
         };
         servers.insert("http".to_string(), http_config);
         config

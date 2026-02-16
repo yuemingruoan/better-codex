@@ -133,8 +133,7 @@ use std::time::Instant;
 fn windows_degraded_sandbox_active() -> bool {
     cfg!(target_os = "windows")
         && codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
-        && codex_core::get_platform_sandbox().is_some()
-        && !codex_core::is_windows_elevated_sandbox_enabled()
+        && codex_core::get_platform_sandbox(true).is_some()
 }
 
 /// If the pasted content exceeds this number of characters, replace it with a

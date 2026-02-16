@@ -7,7 +7,6 @@ use additional_dirs::add_dir_warning_message;
 use app::App;
 pub use app::AppExitInfo;
 pub use app::ExitReason;
-use codex_app_server_protocol::AuthMode;
 use codex_cloud_requirements::cloud_requirements_loader;
 use codex_common::oss::ensure_oss_provider_ready;
 use codex_common::oss::get_default_model_for_oss_provider;
@@ -16,6 +15,7 @@ use codex_core::CodexAuth;
 use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_core::RolloutRecorder;
 use codex_core::ThreadSortKey;
+use codex_core::auth::AuthMode;
 use codex_core::auth::enforce_login_restrictions;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
@@ -83,6 +83,7 @@ pub mod live_wrap;
 mod markdown;
 mod markdown_render;
 mod markdown_stream;
+mod mention_codec;
 mod model_migration;
 mod notifications;
 pub mod onboarding;
@@ -208,7 +209,6 @@ pub async fn run_main(
             std::process::exit(1);
         }
     };
-    let language = config_toml.language.unwrap_or_default();
 
     if let Err(err) =
         codex_core::personality_migration::maybe_migrate_personality(&codex_home, &config_toml)
@@ -216,6 +216,7 @@ pub async fn run_main(
     {
         tracing::warn!(error = %err, "failed to run personality migration");
     }
+    let language = config_toml.language.unwrap_or_default();
 
     let cloud_auth_manager = AuthManager::shared(
         codex_home.to_path_buf(),
@@ -555,7 +556,7 @@ async fn run_ratatui_app(
         } else if cli.fork_last {
             let provider_filter = vec![config.model_provider_id.clone()];
             match RolloutRecorder::list_threads(
-                &config.codex_home,
+                &config,
                 1,
                 None,
                 ThreadSortKey::UpdatedAt,
@@ -573,15 +574,7 @@ async fn run_ratatui_app(
                 Err(_) => resume_picker::SessionSelection::StartFresh,
             }
         } else if cli.fork_picker {
-            match resume_picker::run_fork_picker(
-                &mut tui,
-                &config.codex_home,
-                &config.model_provider_id,
-                cli.fork_show_all,
-                config.language,
-            )
-            .await?
-            {
+            match resume_picker::run_fork_picker(&mut tui, &config, cli.fork_show_all).await? {
                 resume_picker::SessionSelection::Exit => {
                     restore();
                     session_log::log_session_end();
@@ -617,7 +610,7 @@ async fn run_ratatui_app(
             Some(config.cwd.as_path())
         };
         match RolloutRecorder::find_latest_thread_path(
-            &config.codex_home,
+            &config,
             1,
             None,
             ThreadSortKey::UpdatedAt,
@@ -632,15 +625,7 @@ async fn run_ratatui_app(
             _ => resume_picker::SessionSelection::StartFresh,
         }
     } else if cli.resume_picker {
-        match resume_picker::run_resume_picker(
-            &mut tui,
-            &config.codex_home,
-            &config.model_provider_id,
-            cli.resume_show_all,
-            config.language,
-        )
-        .await?
-        {
+        match resume_picker::run_resume_picker(&mut tui, &config, cli.resume_show_all).await? {
             resume_picker::SessionSelection::Exit => {
                 restore();
                 session_log::log_session_end();
@@ -847,7 +832,7 @@ fn get_login_status(config: &Config) -> LoginStatus {
         // to refresh the token. Block on it.
         let codex_home = config.codex_home.clone();
         match CodexAuth::from_auth_storage(&codex_home, config.cli_auth_credentials_store_mode) {
-            Ok(Some(auth)) => LoginStatus::AuthMode(auth.api_auth_mode()),
+            Ok(Some(auth)) => LoginStatus::AuthMode(auth.auth_mode()),
             Ok(None) => LoginStatus::NotAuthenticated,
             Err(err) => {
                 error!("Failed to read auth.json: {err}");

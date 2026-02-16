@@ -2,4 +2,4 @@
 source: tui/src/chatwidget/tests.rs
 expression: lines_to_single_string(&aborted_multi)
 ---
-✗ 您已取消运行 echo line1 ... 的请求
+✗ You canceled the request to run echo line1 ...

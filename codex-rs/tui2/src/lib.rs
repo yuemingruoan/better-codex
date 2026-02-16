@@ -10,11 +10,11 @@ pub use app::ExitReason;
 use codex_app_server_protocol::AuthMode;
 use codex_common::oss::ensure_oss_provider_ready;
 use codex_common::oss::get_default_model_for_oss_provider;
-use codex_common::oss::ollama_chat_deprecation_notice;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_core::RolloutRecorder;
+use codex_core::ThreadSortKey;
 use codex_core::auth::enforce_login_restrictions;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
@@ -238,10 +238,12 @@ pub async fn run_main(
         codex_linux_sandbox_exe,
         base_instructions: None,
         developer_instructions: None,
+        personality: None,
         compact_prompt: None,
         include_apply_patch_tool: None,
         show_raw_agent_reasoning: cli.oss.then_some(true),
         tools_web_search_request: None,
+        ephemeral: None,
         additional_writable_roots: additional_dirs,
     };
 
@@ -465,13 +467,7 @@ async fn run_ratatui_app(
         initial_config
     };
 
-    let ollama_chat_support_notice = match ollama_chat_deprecation_notice(&config).await {
-        Ok(notice) => notice,
-        Err(err) => {
-            tracing::warn!(?err, "Failed to detect Ollama wire API");
-            None
-        }
-    };
+    let ollama_chat_support_notice = None;
     let mut missing_session_exit = |id_str: &str, action: &str| {
         error!("Error finding conversation path: {id_str}");
         restore();
@@ -498,9 +494,10 @@ async fn run_ratatui_app(
         } else if cli.fork_last {
             let provider_filter = vec![config.model_provider_id.clone()];
             match RolloutRecorder::list_threads(
-                &config.codex_home,
+                &config,
                 1,
                 None,
+                ThreadSortKey::UpdatedAt,
                 INTERACTIVE_SESSION_SOURCES,
                 Some(provider_filter.as_slice()),
                 &config.model_provider_id,
@@ -548,9 +545,10 @@ async fn run_ratatui_app(
     } else if cli.resume_last {
         let provider_filter = vec![config.model_provider_id.clone()];
         match RolloutRecorder::list_threads(
-            &config.codex_home,
+            &config,
             1,
             None,
+            ThreadSortKey::UpdatedAt,
             INTERACTIVE_SESSION_SOURCES,
             Some(provider_filter.as_slice()),
             &config.model_provider_id,
@@ -681,7 +679,10 @@ fn get_login_status(config: &Config) -> LoginStatus {
         // to refresh the token. Block on it.
         let codex_home = config.codex_home.clone();
         match CodexAuth::from_auth_storage(&codex_home, config.cli_auth_credentials_store_mode) {
-            Ok(Some(auth)) => LoginStatus::AuthMode(auth.mode),
+            Ok(Some(auth)) => LoginStatus::AuthMode(match auth.auth_mode() {
+                codex_core::auth::AuthMode::ApiKey => AuthMode::ApiKey,
+                codex_core::auth::AuthMode::Chatgpt => AuthMode::Chatgpt,
+            }),
             Ok(None) => LoginStatus::NotAuthenticated,
             Err(err) => {
                 error!("Failed to read auth.json: {err}");
@@ -711,7 +712,13 @@ async fn load_config_or_exit(
 /// or if the current cwd project is already trusted. If not, we need to
 /// show the trust screen.
 fn should_show_trust_screen(config: &Config) -> bool {
-    if cfg!(target_os = "windows") && get_platform_sandbox().is_none() {
+    let windows_sandbox_enabled = config
+        .features
+        .enabled(codex_core::features::Feature::WindowsSandbox)
+        || config
+            .features
+            .enabled(codex_core::features::Feature::WindowsSandboxElevated);
+    if cfg!(target_os = "windows") && get_platform_sandbox(windows_sandbox_enabled).is_none() {
         // If the experimental sandbox is not enabled, Native Windows cannot enforce sandboxed write access; skip the trust prompt entirely.
         return false;
     }
@@ -767,7 +774,7 @@ mod tests {
         let mut config = build_config(&temp_dir).await?;
         config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
         config.active_project = ProjectConfig { trust_level: None };
-        config.set_windows_sandbox_globally(false);
+        config.set_windows_sandbox_enabled(false);
 
         let should_show = should_show_trust_screen(&config);
         if cfg!(target_os = "windows") {
@@ -790,7 +797,7 @@ mod tests {
         let mut config = build_config(&temp_dir).await?;
         config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
         config.active_project = ProjectConfig { trust_level: None };
-        config.set_windows_sandbox_globally(true);
+        config.set_windows_sandbox_enabled(true);
 
         let should_show = should_show_trust_screen(&config);
         if cfg!(target_os = "windows") {

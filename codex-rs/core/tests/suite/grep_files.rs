@@ -1,14 +1,26 @@
 #![cfg(not(target_os = "windows"))]
 
 use anyhow::Result;
+use codex_core::CodexAuth;
+use codex_core::features::Feature;
+use codex_protocol::openai_models::ConfigShellToolType;
+use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ModelVisibility;
+use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::openai_models::ReasoningEffortPreset;
+use codex_protocol::openai_models::TruncationPolicyConfig;
+use codex_protocol::openai_models::default_input_modalities;
 use core_test_support::responses::mount_function_call_agent_response;
-use core_test_support::responses::start_mock_server;
+use core_test_support::responses::mount_models_once;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use std::collections::HashSet;
 use std::path::Path;
 use std::process::Command as StdCommand;
+use wiremock::BodyPrintLimit;
+use wiremock::MockServer;
 
 const MODEL_WITH_TOOL: &str = "test-gpt-5.1-codex";
 
@@ -34,7 +46,10 @@ async fn grep_files_tool_collects_matches() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_ripgrep_missing!(Ok(()));
 
-    let server = start_mock_server().await;
+    let server = MockServer::builder()
+        .body_print_limit(BodyPrintLimit::Limited(80_000))
+        .start()
+        .await;
     let test = build_test_codex(&server).await?;
 
     let search_dir = test.cwd.path().join("src");
@@ -92,7 +107,10 @@ async fn grep_files_tool_reports_empty_results() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_ripgrep_missing!(Ok(()));
 
-    let server = start_mock_server().await;
+    let server = MockServer::builder()
+        .body_print_limit(BodyPrintLimit::Limited(80_000))
+        .start()
+        .await;
     let test = build_test_codex(&server).await?;
 
     let search_dir = test.cwd.path().join("logs");
@@ -126,7 +144,48 @@ async fn grep_files_tool_reports_empty_results() -> Result<()> {
 
 #[allow(clippy::expect_used)]
 async fn build_test_codex(server: &wiremock::MockServer) -> Result<TestCodex> {
-    let mut builder = test_codex().with_model(MODEL_WITH_TOOL);
+    mount_models_once(
+        server,
+        ModelsResponse {
+            models: vec![ModelInfo {
+                slug: MODEL_WITH_TOOL.to_string(),
+                display_name: "test-gpt-5.1-codex".to_string(),
+                description: Some("Test model with grep_files enabled".to_string()),
+                default_reasoning_level: Some(ReasoningEffort::Medium),
+                supported_reasoning_levels: vec![ReasoningEffortPreset {
+                    effort: ReasoningEffort::Medium,
+                    description: ReasoningEffort::Medium.to_string(),
+                }],
+                shell_type: ConfigShellToolType::Default,
+                visibility: ModelVisibility::List,
+                supported_in_api: true,
+                priority: 1,
+                upgrade: None,
+                base_instructions: "base instructions".to_string(),
+                model_messages: None,
+                supports_reasoning_summaries: false,
+                support_verbosity: false,
+                default_verbosity: None,
+                apply_patch_tool_type: None,
+                truncation_policy: TruncationPolicyConfig::bytes(10_000),
+                supports_parallel_tool_calls: false,
+                context_window: Some(272_000),
+                auto_compact_token_limit: None,
+                effective_context_window_percent: 95,
+                experimental_supported_tools: vec!["grep_files".to_string()],
+                input_modalities: default_input_modalities(),
+                prefer_websockets: false,
+            }],
+        },
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_model(MODEL_WITH_TOOL)
+        .with_config(|config| {
+            config.features.enable(Feature::RemoteModels);
+        });
     builder.build(server).await
 }
 

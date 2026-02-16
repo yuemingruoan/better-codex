@@ -9,9 +9,10 @@ use codex_core::Cursor;
 use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_core::RolloutRecorder;
 use codex_core::ThreadItem;
+use codex_core::ThreadSortKey;
 use codex_core::ThreadsPage;
+use codex_core::config::ConfigBuilder;
 use codex_core::path_utils;
-use codex_protocol::items::TurnItem;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -36,8 +37,6 @@ use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
 use codex_protocol::config_types::Language;
-use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::SessionMetaLine;
 
 const PAGE_SIZE: usize = 25;
 const LOAD_NEAR_THRESHOLD: usize = 5;
@@ -81,7 +80,6 @@ impl SessionPickerAction {
 
 #[derive(Clone)]
 struct PageLoadRequest {
-    codex_home: PathBuf,
     cursor: Option<Cursor>,
     request_token: usize,
     search_token: Option<usize>,
@@ -148,6 +146,10 @@ async fn run_session_picker(
     let alt = AltScreenGuard::enter(tui);
     let (bg_tx, bg_rx) = mpsc::unbounded_channel();
 
+    let list_config = ConfigBuilder::default()
+        .codex_home(codex_home.to_path_buf())
+        .build()
+        .await?;
     let default_provider = default_provider.to_string();
     let filter_cwd = if show_all {
         None
@@ -158,12 +160,14 @@ async fn run_session_picker(
     let loader_tx = bg_tx.clone();
     let page_loader: PageLoader = Arc::new(move |request: PageLoadRequest| {
         let tx = loader_tx.clone();
+        let list_config = list_config.clone();
         tokio::spawn(async move {
             let provider_filter = vec![request.default_provider.clone()];
             let page = RolloutRecorder::list_threads(
-                &request.codex_home,
+                &list_config,
                 PAGE_SIZE,
                 request.cursor.as_ref(),
+                ThreadSortKey::UpdatedAt,
                 INTERACTIVE_SESSION_SOURCES,
                 Some(provider_filter.as_slice()),
                 request.default_provider.as_str(),
@@ -455,7 +459,6 @@ impl PickerState {
         self.request_frame();
 
         (self.page_loader)(PageLoadRequest {
-            codex_home: self.codex_home.clone(),
             cursor: None,
             request_token,
             search_token: None,
@@ -685,7 +688,6 @@ impl PickerState {
         self.request_frame();
 
         (self.page_loader)(PageLoadRequest {
-            codex_home: self.codex_home.clone(),
             cursor: Some(cursor),
             request_token,
             search_token,
@@ -714,19 +716,15 @@ fn rows_from_items(items: Vec<ThreadItem>, language: Language) -> Vec<Row> {
 }
 
 fn head_to_row(item: &ThreadItem, language: Language) -> Row {
-    let created_at = item
-        .created_at
-        .as_deref()
-        .and_then(parse_timestamp_str)
-        .or_else(|| item.head.first().and_then(extract_timestamp));
+    let created_at = item.created_at.as_deref().and_then(parse_timestamp_str);
     let updated_at = item
         .updated_at
         .as_deref()
         .and_then(parse_timestamp_str)
         .or(created_at);
-
-    let (cwd, git_branch) = extract_session_meta_from_head(&item.head);
-    let preview = preview_from_head(&item.head)
+    let preview = item
+        .first_user_message
+        .as_deref()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| tr(language, "resume_picker.preview.empty").to_string());
@@ -736,20 +734,9 @@ fn head_to_row(item: &ThreadItem, language: Language) -> Row {
         preview,
         created_at,
         updated_at,
-        cwd,
-        git_branch,
+        cwd: item.cwd.clone(),
+        git_branch: item.git_branch.clone(),
     }
-}
-
-fn extract_session_meta_from_head(head: &[serde_json::Value]) -> (Option<PathBuf>, Option<String>) {
-    for value in head {
-        if let Ok(meta_line) = serde_json::from_value::<SessionMetaLine>(value.clone()) {
-            let cwd = Some(meta_line.meta.cwd);
-            let git_branch = meta_line.git.and_then(|git| git.branch);
-            return (cwd, git_branch);
-        }
-    }
-    (None, None)
 }
 
 fn paths_match(a: &Path, b: &Path) -> bool {
@@ -766,23 +753,6 @@ fn parse_timestamp_str(ts: &str) -> Option<DateTime<Utc>> {
     chrono::DateTime::parse_from_rfc3339(ts)
         .map(|dt| dt.with_timezone(&Utc))
         .ok()
-}
-
-fn extract_timestamp(value: &serde_json::Value) -> Option<DateTime<Utc>> {
-    value
-        .get("timestamp")
-        .and_then(|v| v.as_str())
-        .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
-        .map(|dt| dt.with_timezone(&Utc))
-}
-
-fn preview_from_head(head: &[serde_json::Value]) -> Option<String> {
-    head.iter()
-        .filter_map(|value| serde_json::from_value::<ResponseItem>(value.clone()).ok())
-        .find_map(|item| match codex_core::parse_turn_item(&item) {
-            Some(TurnItem::UserMessage(user)) => Some(user.message()),
-            _ => None,
-        })
 }
 
 fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
@@ -1177,29 +1147,22 @@ mod tests {
     use crossterm::event::KeyEvent;
     use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
-    use serde_json::json;
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::Mutex;
 
-    fn head_with_ts_and_user_text(ts: &str, texts: &[&str]) -> Vec<serde_json::Value> {
-        vec![
-            json!({ "timestamp": ts }),
-            json!({
-                "type": "message",
-                "role": "user",
-                "content": texts
-                    .iter()
-                    .map(|t| json!({ "type": "input_text", "text": *t }))
-                    .collect::<Vec<_>>()
-            }),
-        ]
-    }
-
     fn make_item(path: &str, ts: &str, preview: &str) -> ThreadItem {
         ThreadItem {
             path: PathBuf::from(path),
-            head: head_with_ts_and_user_text(ts, &[preview]),
+            thread_id: None,
+            first_user_message: Some(preview.to_string()),
+            cwd: None,
+            git_branch: None,
+            git_sha: None,
+            git_origin_url: None,
+            source: None,
+            model_provider: None,
+            cli_version: None,
             created_at: Some(ts.to_string()),
             updated_at: Some(ts.to_string()),
         }
@@ -1225,56 +1188,17 @@ mod tests {
     }
 
     #[test]
-    fn preview_uses_first_message_input_text() {
-        let head = vec![
-            json!({ "timestamp": "2025-01-01T00:00:00Z" }),
-            json!({
-                "type": "message",
-                "role": "user",
-                "content": [
-                    { "type": "input_text", "text": "# AGENTS.md instructions for project\n\n<INSTRUCTIONS>\nhi\n</INSTRUCTIONS>" },
-                ]
-            }),
-            json!({
-                "type": "message",
-                "role": "user",
-                "content": [
-                    { "type": "input_text", "text": "<environment_context>...</environment_context>" },
-                ]
-            }),
-            json!({
-                "type": "message",
-                "role": "user",
-                "content": [
-                    { "type": "input_text", "text": "real question" },
-                    { "type": "input_image", "image_url": "ignored" }
-                ]
-            }),
-            json!({
-                "type": "message",
-                "role": "user",
-                "content": [ { "type": "input_text", "text": "later text" } ]
-            }),
-        ];
-        let preview = preview_from_head(&head);
-        assert_eq!(preview.as_deref(), Some("real question"));
+    fn row_preview_uses_first_user_message() {
+        let item = make_item("/tmp/a.jsonl", "2025-01-01T00:00:00Z", "real question");
+        let row = head_to_row(&item, Language::En);
+        assert_eq!(row.preview, "real question");
     }
 
     #[test]
     fn rows_from_items_preserves_backend_order() {
         // Construct two items with different timestamps and real user text.
-        let a = ThreadItem {
-            path: PathBuf::from("/tmp/a.jsonl"),
-            head: head_with_ts_and_user_text("2025-01-01T00:00:00Z", &["A"]),
-            created_at: Some("2025-01-01T00:00:00Z".into()),
-            updated_at: Some("2025-01-01T00:00:00Z".into()),
-        };
-        let b = ThreadItem {
-            path: PathBuf::from("/tmp/b.jsonl"),
-            head: head_with_ts_and_user_text("2025-01-02T00:00:00Z", &["B"]),
-            created_at: Some("2025-01-02T00:00:00Z".into()),
-            updated_at: Some("2025-01-02T00:00:00Z".into()),
-        };
+        let a = make_item("/tmp/a.jsonl", "2025-01-01T00:00:00Z", "A");
+        let b = make_item("/tmp/b.jsonl", "2025-01-02T00:00:00Z", "B");
         let rows = rows_from_items(vec![a, b], Language::En);
         assert_eq!(rows.len(), 2);
         // Preserve the given order even if timestamps differ; backend already provides newest-first.
@@ -1284,13 +1208,8 @@ mod tests {
 
     #[test]
     fn row_uses_tail_timestamp_for_updated_at() {
-        let head = head_with_ts_and_user_text("2025-01-01T00:00:00Z", &["Hello"]);
-        let item = ThreadItem {
-            path: PathBuf::from("/tmp/a.jsonl"),
-            head,
-            created_at: Some("2025-01-01T00:00:00Z".into()),
-            updated_at: Some("2025-01-01T01:00:00Z".into()),
-        };
+        let mut item = make_item("/tmp/a.jsonl", "2025-01-01T00:00:00Z", "Hello");
+        item.updated_at = Some("2025-01-01T01:00:00Z".into());
 
         let row = head_to_row(&item, Language::En);
         let expected_created = chrono::DateTime::parse_from_rfc3339("2025-01-01T00:00:00Z")
@@ -1474,12 +1393,19 @@ mod tests {
             Language::En,
         );
 
+        let config = ConfigBuilder::default()
+            .codex_home(state.codex_home.clone())
+            .build()
+            .await
+            .expect("build config");
+        let provider_filter = vec![String::from("openai")];
         let page = RolloutRecorder::list_threads(
-            &state.codex_home,
+            &config,
             PAGE_SIZE,
             None,
+            ThreadSortKey::UpdatedAt,
             INTERACTIVE_SESSION_SOURCES,
-            Some(&[String::from("openai")]),
+            Some(provider_filter.as_slice()),
             "openai",
         )
         .await

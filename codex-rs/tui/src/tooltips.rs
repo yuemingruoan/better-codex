@@ -1,89 +1,99 @@
-use crate::i18n::tr;
-use crate::i18n::tr_list;
 use codex_core::features::FEATURES;
-use codex_core::features::Feature;
 use codex_protocol::account::PlanType;
-use codex_protocol::config_types::Language;
 use lazy_static::lazy_static;
 use rand::Rng;
 
 const ANNOUNCEMENT_TIP_URL: &str =
     "https://raw.githubusercontent.com/openai/codex/main/announcement_tip.toml";
 
+const IS_MACOS: bool = cfg!(target_os = "macos");
+
+const PAID_TOOLTIP: &str = "*New* Try the **Codex App** with 2x rate limits until *April 2nd*. Run 'codex app' or visit https://chatgpt.com/codex";
+const PAID_TOOLTIP_NON_MAC: &str = "*New* 2x rate limits until *April 2nd*.";
+const OTHER_TOOLTIP: &str =
+    "*New* Build faster with the **Codex App**. Run 'codex app' or visit https://chatgpt.com/codex";
+const OTHER_TOOLTIP_NON_MAC: &str = "*New* Build faster with Codex.";
+const FREE_GO_TOOLTIP: &str =
+    "*New* Codex is included in your plan for free through *March 2nd* – let’s build together.";
+
+const RAW_TOOLTIPS: &str = include_str!("../tooltips.txt");
+
 lazy_static! {
-    static ref TOOLTIPS_EN: Vec<String> = tr_list(Language::En, "tooltips.items").to_vec();
-    static ref TOOLTIPS_ZH: Vec<String> = tr_list(Language::ZhCn, "tooltips.items").to_vec();
-    static ref ALL_TOOLTIPS_EN: Vec<String> = {
+    static ref TOOLTIPS: Vec<&'static str> = RAW_TOOLTIPS
+        .lines()
+        .map(str::trim)
+        .filter(|line| {
+            if line.is_empty() || line.starts_with('#') {
+                return false;
+            }
+            if !IS_MACOS && line.contains("codex app") {
+                return false;
+            }
+            true
+        })
+        .collect();
+    static ref ALL_TOOLTIPS: Vec<&'static str> = {
         let mut tips = Vec::new();
-        tips.extend(TOOLTIPS_EN.iter().cloned());
-        tips.extend(experimental_tooltips(Language::En));
-        tips
-    };
-    static ref ALL_TOOLTIPS_ZH: Vec<String> = {
-        let mut tips = Vec::new();
-        tips.extend(TOOLTIPS_ZH.iter().cloned());
-        tips.extend(experimental_tooltips(Language::ZhCn));
+        tips.extend(TOOLTIPS.iter().copied());
+        tips.extend(experimental_tooltips());
         tips
     };
 }
 
-fn experimental_tooltips(language: Language) -> Vec<String> {
+fn experimental_tooltips() -> Vec<&'static str> {
     FEATURES
         .iter()
-        .filter_map(|spec| {
-            spec.stage
-                .experimental_announcement()
-                .and_then(|_| experimental_tooltip(spec.id, language))
-        })
+        .filter_map(|spec| spec.stage.experimental_announcement())
         .collect()
 }
 
-fn experimental_tooltip(feature: Feature, language: Language) -> Option<String> {
-    let key = match feature {
-        Feature::ShellSnapshot => "tooltips.experimental.shell_snapshot",
-        Feature::Collab => "tooltips.experimental.collab",
-        Feature::Apps => "tooltips.experimental.apps",
-        _ => return None,
-    };
-    Some(tr(language, key).to_string())
-}
-
 /// Pick a random tooltip to show to the user when starting Codex.
-pub(crate) fn get_tooltip(plan: Option<PlanType>, language: Language) -> Option<String> {
+pub(crate) fn get_tooltip(plan: Option<PlanType>) -> Option<String> {
     let mut rng = rand::rng();
-
-    // Leave small chance for a random tooltip to be shown.
-    if rng.random_ratio(8, 10) {
-        let promo_key = match plan {
-            Some(PlanType::Plus)
-            | Some(PlanType::Business)
-            | Some(PlanType::Team)
-            | Some(PlanType::Enterprise)
-            | Some(PlanType::Pro) => "tooltips.promo.paid",
-            Some(PlanType::Go) | Some(PlanType::Free) => "tooltips.promo.free_go",
-            _ => "tooltips.promo.other",
-        };
-        return Some(tr(language, promo_key).to_string());
-    }
 
     if let Some(announcement) = announcement::fetch_announcement_tip() {
         return Some(announcement);
     }
 
-    pick_tooltip(&mut rng, language).map(str::to_string)
+    // Leave small chance for a random tooltip to be shown.
+    if rng.random_ratio(8, 10) {
+        match plan {
+            Some(PlanType::Plus)
+            | Some(PlanType::Business)
+            | Some(PlanType::Team)
+            | Some(PlanType::Enterprise)
+            | Some(PlanType::Pro) => {
+                let tooltip = if IS_MACOS {
+                    PAID_TOOLTIP
+                } else {
+                    PAID_TOOLTIP_NON_MAC
+                };
+                return Some(tooltip.to_string());
+            }
+            Some(PlanType::Go) | Some(PlanType::Free) => {
+                return Some(FREE_GO_TOOLTIP.to_string());
+            }
+            _ => {
+                let tooltip = if IS_MACOS {
+                    OTHER_TOOLTIP
+                } else {
+                    OTHER_TOOLTIP_NON_MAC
+                };
+                return Some(tooltip.to_string());
+            }
+        }
+    }
+
+    pick_tooltip(&mut rng).map(str::to_string)
 }
 
-fn pick_tooltip<R: Rng + ?Sized>(rng: &mut R, language: Language) -> Option<&'static str> {
-    let tooltips = match language {
-        Language::ZhCn => &*ALL_TOOLTIPS_ZH,
-        Language::En => &*ALL_TOOLTIPS_EN,
-    };
-    if tooltips.is_empty() {
+fn pick_tooltip<R: Rng + ?Sized>(rng: &mut R) -> Option<&'static str> {
+    if ALL_TOOLTIPS.is_empty() {
         None
     } else {
-        tooltips
-            .get(rng.random_range(0..tooltips.len()))
-            .map(String::as_str)
+        ALL_TOOLTIPS
+            .get(rng.random_range(0..ALL_TOOLTIPS.len()))
+            .copied()
     }
 }
 
@@ -241,18 +251,18 @@ mod tests {
     #[test]
     fn random_tooltip_returns_some_tip_when_available() {
         let mut rng = StdRng::seed_from_u64(42);
-        assert!(pick_tooltip(&mut rng, Language::En).is_some());
+        assert!(pick_tooltip(&mut rng).is_some());
     }
 
     #[test]
     fn random_tooltip_is_reproducible_with_seed() {
         let expected = {
             let mut rng = StdRng::seed_from_u64(7);
-            pick_tooltip(&mut rng, Language::En)
+            pick_tooltip(&mut rng)
         };
 
         let mut rng = StdRng::seed_from_u64(7);
-        assert_eq!(expected, pick_tooltip(&mut rng, Language::En));
+        assert_eq!(expected, pick_tooltip(&mut rng));
     }
 
     #[test]

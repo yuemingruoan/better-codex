@@ -22,7 +22,9 @@ anyhow = { workspace = true }
 arc-swap = "1.8.0"
 async-channel = { workspace = true }
 async-trait = { workspace = true }
+askama = { workspace = true }
 base64 = { workspace = true }
+bm25 = { workspace = true }
 chardetng = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 clap = { workspace = true, features = ["derive"] }
@@ -31,10 +33,13 @@ codex-app-server-protocol = { workspace = true }
 codex-apply-patch = { workspace = true }
 codex-async-utils = { workspace = true }
 codex-client = { workspace = true }
+codex-shell-command = { workspace = true }
 codex-execpolicy = { workspace = true }
 codex-file-search = { workspace = true }
 codex-git = { workspace = true }
+codex-hooks = { workspace = true }
 codex-keyring-store = { workspace = true }
+codex-network-proxy = { workspace = true }
 codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
 codex-rmcp-client = { workspace = true }
@@ -103,8 +108,6 @@ tokio-tungstenite = { workspace = true }
 toml = { workspace = true }
 toml_edit = { workspace = true }
 tracing = { workspace = true, features = ["log"] }
-tree-sitter = { workspace = true }
-tree-sitter-bash = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4", "v5"] }
 which = { workspace = true }
@@ -112,7 +115,6 @@ wildmatch = { workspace = true }
 zip = { workspace = true }
 
 [features]
-deterministic_process_ids = []
 test-support = []
 
 
@@ -135,6 +137,11 @@ openssl-sys = { workspace = true, features = ["vendored"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { workspace = true, features = ["windows-native"] }
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_UI_Shell",
+] }
 
 [target.'cfg(any(target_os = "freebsd", target_os = "openbsd"))'.dependencies]
 keyring = { workspace = true, features = ["sync-secret-service"] }
@@ -143,9 +150,6 @@ keyring = { workspace = true, features = ["sync-secret-service"] }
 assert_cmd = { workspace = true }
 assert_matches = { workspace = true }
 codex-arg0 = { workspace = true }
-codex-core = { path = ".", default-features = false, features = [
-    "deterministic_process_ids",
-] }
 codex-otel = { workspace = true, features = [
     "disable-default-metrics-exporter",
 ] }

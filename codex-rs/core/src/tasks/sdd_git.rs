@@ -29,7 +29,7 @@ use crate::protocol::SandboxPolicy;
 use crate::protocol::SddGitAction;
 use crate::protocol::TurnStartedEvent;
 use crate::protocol::WarningEvent;
-use crate::sandboxing::ExecEnv;
+use crate::sandboxing::ExecRequest;
 use crate::state::TaskKind;
 use crate::tools::format_exec_output_str;
 
@@ -358,13 +358,14 @@ async fn run_git_logged(
         )
         .await;
 
-    let exec_env = ExecEnv {
+    let exec_env = ExecRequest {
         command: command.clone(),
         cwd: turn_context.cwd.clone(),
         env: create_env(
             &turn_context.shell_environment_policy,
             Some(session.conversation_id),
         ),
+        network: None,
         expiration: SDD_GIT_TIMEOUT_MS.into(),
         sandbox: SandboxType::None,
         windows_sandbox_level: turn_context.windows_sandbox_level,

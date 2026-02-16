@@ -45,7 +45,7 @@ jobs:
             timeout: 40
           - os: macos-14
             artifact: codex-macos
-            timeout: 45
+            timeout: 75
           - os: windows-latest
             artifact: codex-windows
             timeout: 60

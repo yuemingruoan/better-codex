@@ -26,6 +26,8 @@ use codex_tui::AppExitInfo;
 use codex_tui::Cli as TuiCli;
 use codex_tui::ExitReason;
 use codex_tui::update_action::UpdateAction;
+use codex_tui2 as tui2;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use owo_colors::OwoColorize;
 use std::io::IsTerminal;
 use std::path::PathBuf;
@@ -45,6 +47,10 @@ use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::find_codex_home;
+use codex_core::config::load_config_as_toml_with_cli_overrides;
+use codex_core::features::Feature;
+use codex_core::features::FeatureOverrides;
+use codex_core::features::Features;
 use codex_core::features::Stage;
 use codex_core::features::is_known_feature_key;
 use codex_core::terminal::TerminalName;
@@ -882,7 +888,53 @@ async fn run_interactive_tui(
         }
     }
 
-    codex_tui::run_main(interactive, codex_linux_sandbox_exe).await
+    match select_tui_frontend(is_tui2_enabled(&interactive).await?) {
+        TuiFrontend::Tui2 => {
+            let result = tui2::run_main(interactive.into(), codex_linux_sandbox_exe).await?;
+            Ok(result.into())
+        }
+        TuiFrontend::Tui => codex_tui::run_main(interactive, codex_linux_sandbox_exe).await,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TuiFrontend {
+    Tui,
+    Tui2,
+}
+
+fn select_tui_frontend(tui2_enabled: bool) -> TuiFrontend {
+    if tui2_enabled {
+        TuiFrontend::Tui2
+    } else {
+        TuiFrontend::Tui
+    }
+}
+
+/// Returns `Ok(true)` when the resolved configuration enables the `tui2` feature flag.
+///
+/// This performs a lightweight config load (honoring the same precedence as the lower-level TUI
+/// bootstrap: `$CODEX_HOME`, config.toml, profile, cwd, and CLI `-c` overrides) solely to decide
+/// which TUI frontend to launch. The full configuration is still loaded later by the selected TUI.
+async fn is_tui2_enabled(cli: &TuiCli) -> std::io::Result<bool> {
+    let raw_overrides = cli.config_overrides.raw_overrides.clone();
+    let overrides_cli = codex_common::CliConfigOverrides { raw_overrides };
+    let cli_kv_overrides = overrides_cli
+        .parse_overrides()
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+
+    let codex_home = find_codex_home()?;
+    let cwd = cli.cwd.clone();
+    let config_cwd = match cwd.as_deref() {
+        Some(path) => AbsolutePathBuf::from_absolute_path(path)?,
+        None => AbsolutePathBuf::current_dir()?,
+    };
+    let config_toml =
+        load_config_as_toml_with_cli_overrides(&codex_home, &config_cwd, cli_kv_overrides).await?;
+    let config_profile = config_toml.get_config_profile(cli.config_profile.clone())?;
+    let features =
+        Features::from_config(&config_toml, &config_profile, FeatureOverrides::default());
+    Ok(features.enabled(Feature::Tui2))
 }
 
 fn confirm(prompt: &str) -> std::io::Result<bool> {
@@ -1100,6 +1152,16 @@ mod tests {
             update_action: None,
             exit_reason: ExitReason::UserRequested,
         }
+    }
+
+    #[test]
+    fn select_tui_frontend_uses_tui2_when_enabled() {
+        assert_eq!(select_tui_frontend(true), TuiFrontend::Tui2);
+    }
+
+    #[test]
+    fn select_tui_frontend_uses_tui_when_disabled() {
+        assert_eq!(select_tui_frontend(false), TuiFrontend::Tui);
     }
 
     #[test]

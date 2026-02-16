@@ -2,6 +2,5 @@
 source: tui/src/chatwidget/tests.rs
 expression: lines_to_single_string(&aborted_long)
 ---
-✗ 您已取消运行 echo
-  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa... 的
-  请求
+✗ You canceled the request to run echo
+  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa...

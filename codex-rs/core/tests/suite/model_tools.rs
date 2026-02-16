@@ -36,7 +36,11 @@ async fn collect_tool_identifiers_for_model(model: &str) -> Vec<String> {
         .with_model(model)
         // Keep tool expectations stable when the default web_search mode changes.
         .with_config(|config| {
-            config.web_search_mode = Some(WebSearchMode::Cached);
+            config.features.enable(Feature::RemoteModels);
+            config
+                .web_search_mode
+                .set(WebSearchMode::Cached)
+                .expect("test web_search_mode should satisfy constraints");
             config.features.enable(Feature::CollaborationModes);
         });
     let test = builder
@@ -103,6 +107,15 @@ async fn model_selects_expected_tools() {
     assert_has_shell_or_unified_exec("codex-mini-latest", &codex_tools, &["local_shell"]);
     assert_no_apply_patch("codex-mini-latest", &codex_tools);
 
+    let gpt51_codex_max_tools = collect_tool_identifiers_for_model("gpt-5.1-codex-max").await;
+    assert_has_common_tools("gpt-5.1-codex-max", &gpt51_codex_max_tools);
+    assert_has_shell_or_unified_exec(
+        "gpt-5.1-codex-max",
+        &gpt51_codex_max_tools,
+        &["shell_command"],
+    );
+    assert_has_apply_patch("gpt-5.1-codex-max", &gpt51_codex_max_tools);
+
     let gpt5_codex_tools = collect_tool_identifiers_for_model("gpt-5-codex").await;
     assert_has_common_tools("gpt-5-codex", &gpt5_codex_tools);
     assert_has_shell_or_unified_exec("gpt-5-codex", &gpt5_codex_tools, &["shell_command"]);
@@ -127,5 +140,5 @@ async fn model_selects_expected_tools() {
     assert_has_common_tools("exp-5.1", &exp_tools);
     assert!(has_tool(&exp_tools, "exec_command"));
     assert!(has_tool(&exp_tools, "write_stdin"));
-    assert_has_apply_patch("exp-5.1", &exp_tools);
+    assert_no_apply_patch("exp-5.1", &exp_tools);
 }

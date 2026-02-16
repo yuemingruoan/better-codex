@@ -2,4 +2,4 @@
 source: tui/src/chatwidget/tests.rs
 expression: last
 ---
-■ 对话已中断——请告诉模型需要做出哪些不同的处理。遇到问题？使用 `/feedback` 报告。
+■ Conversation interrupted - tell the model what to do differently. Something went wrong? Hit `/feedback` to report the issue.

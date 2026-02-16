@@ -16,13 +16,16 @@ use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::built_in_model_providers;
 use codex_core::default_client::originator;
 use codex_core::error::CodexErr;
+use codex_core::i18n::tr;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
 use codex_otel::OtelManager;
+use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::Language;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Settings;
@@ -37,6 +40,7 @@ use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
+use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_once_match;
@@ -295,7 +299,10 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
         })
         .await
         .unwrap();
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    wait_for_event(&codex, |ev| {
+        matches!(ev, EventMsg::TurnComplete(_) | EventMsg::Error(_))
+    })
+    .await;
 
     let request = resp_mock.single_request();
     let request_body = request.body_json();
@@ -663,6 +670,382 @@ async fn includes_user_instructions_message_in_request() {
     assert_message_role(&request_body["input"][2], "user");
     assert_message_starts_with(&request_body["input"][2], "<environment_context>");
     assert_message_ends_with(&request_body["input"][2], "</environment_context>");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn parallel_priority_spec_injected_when_enabled_and_removed_after_override() {
+    skip_if_no_network!();
+    let server = MockServer::start().await;
+
+    let resp_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+            sse(vec![ev_response_created("resp2"), ev_completed("resp2")]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::from_api_key("Test API Key"))
+        .with_config(|config| {
+            config.spec.parallel_priority = true;
+        });
+    let codex = builder
+        .build(&server)
+        .await
+        .expect("create new conversation")
+        .codex;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            collaboration_mode: None,
+            personality: None,
+            spec_parallel_priority: Some(false),
+
+            spec_sdd_planning: None,
+        })
+        .await
+        .expect("override spec toggle");
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello again".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = resp_mock.requests();
+    assert_eq!(requests.len(), 2);
+
+    let spec_text = tr(Language::En, "prompt.spec.parallel_priority");
+    let first_has_spec = requests[0]
+        .message_input_texts("user")
+        .iter()
+        .any(|text| text.contains(spec_text));
+    let second_has_spec = requests[1]
+        .message_input_texts("user")
+        .iter()
+        .any(|text| text.contains(spec_text));
+
+    assert!(
+        first_has_spec,
+        "first request should include Parallel Priority spec"
+    );
+    assert!(
+        !second_has_spec,
+        "second request should not include Parallel Priority spec after disabling"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sdd_planning_spec_injected_when_enabled_and_removed_after_override() {
+    skip_if_no_network!();
+    let server = MockServer::start().await;
+
+    let resp_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+            sse(vec![ev_response_created("resp2"), ev_completed("resp2")]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::from_api_key("Test API Key"))
+        .with_config(|config| {
+            config.spec.sdd_planning = true;
+        });
+    let codex = builder
+        .build(&server)
+        .await
+        .expect("create new conversation")
+        .codex;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            collaboration_mode: None,
+            personality: None,
+            spec_parallel_priority: None,
+            spec_sdd_planning: Some(false),
+        })
+        .await
+        .expect("override spec toggle");
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello again".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = resp_mock.requests();
+    assert_eq!(requests.len(), 2);
+
+    let spec_text = tr(Language::En, "prompt.spec.sdd_planning");
+    let first_has_spec = requests[0]
+        .message_input_texts("user")
+        .iter()
+        .any(|text| text.contains(spec_text));
+    let second_has_spec = requests[1]
+        .message_input_texts("user")
+        .iter()
+        .any(|text| text.contains(spec_text));
+
+    assert!(
+        first_has_spec,
+        "first request should include SDD Planning spec"
+    );
+    assert!(
+        !second_has_spec,
+        "second request should not include SDD Planning spec after disabling"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sdd_planning_override_keeps_parallel_priority_injection() {
+    skip_if_no_network!();
+    let server = MockServer::start().await;
+
+    let resp_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+            sse(vec![ev_response_created("resp2"), ev_completed("resp2")]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::from_api_key("Test API Key"))
+        .with_config(|config| {
+            config.spec.parallel_priority = true;
+            config.spec.sdd_planning = true;
+        });
+    let codex = builder
+        .build(&server)
+        .await
+        .expect("create new conversation")
+        .codex;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            collaboration_mode: None,
+            personality: None,
+            spec_parallel_priority: None,
+            spec_sdd_planning: Some(false),
+        })
+        .await
+        .expect("override spec toggle");
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello again".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = resp_mock.requests();
+    assert_eq!(requests.len(), 2);
+
+    let parallel_spec_text = tr(Language::En, "prompt.spec.parallel_priority");
+    let sdd_spec_text = tr(Language::En, "prompt.spec.sdd_planning");
+
+    let first_has_parallel_spec = requests[0]
+        .message_input_texts("user")
+        .iter()
+        .any(|text| text.contains(parallel_spec_text));
+    let first_has_sdd_spec = requests[0]
+        .message_input_texts("user")
+        .iter()
+        .any(|text| text.contains(sdd_spec_text));
+    let second_has_parallel_spec = requests[1]
+        .message_input_texts("user")
+        .iter()
+        .any(|text| text.contains(parallel_spec_text));
+    let second_has_sdd_spec = requests[1]
+        .message_input_texts("user")
+        .iter()
+        .any(|text| text.contains(sdd_spec_text));
+
+    assert!(
+        first_has_parallel_spec,
+        "first request should include Parallel Priority spec"
+    );
+    assert!(
+        first_has_sdd_spec,
+        "first request should include SDD Planning spec"
+    );
+    assert!(
+        second_has_parallel_spec,
+        "second request should still include Parallel Priority spec"
+    );
+    assert!(
+        !second_has_sdd_spec,
+        "second request should not include SDD Planning spec after disabling"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spec_instructions_only_injected_for_user_prompt_sampling_requests() {
+    skip_if_no_network!();
+    let server = MockServer::start().await;
+
+    let call_id = "call-1";
+    let plan_args = json!({
+        "plan": [
+            {"step": "Inspect workspace", "status": "in_progress"}
+        ],
+    })
+    .to_string();
+    let resp_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp1"),
+                ev_function_call(call_id, "update_plan", &plan_args),
+                ev_completed("resp1"),
+            ]),
+            sse(vec![ev_response_created("resp2"), ev_completed("resp2")]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::from_api_key("Test API Key"))
+        .with_config(|config| {
+            config.spec.parallel_priority = true;
+            config.spec.sdd_planning = true;
+        });
+    let codex = builder
+        .build(&server)
+        .await
+        .expect("create new conversation")
+        .codex;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = resp_mock.requests();
+    assert_eq!(requests.len(), 2);
+
+    let parallel_spec_text = tr(Language::En, "prompt.spec.parallel_priority");
+    let sdd_spec_text = tr(Language::En, "prompt.spec.sdd_planning");
+    let first_has_parallel_spec = requests[0]
+        .message_input_texts("user")
+        .iter()
+        .any(|text| text.contains(parallel_spec_text));
+    let first_has_sdd_spec = requests[0]
+        .message_input_texts("user")
+        .iter()
+        .any(|text| text.contains(sdd_spec_text));
+    let second_has_parallel_spec = requests[1]
+        .message_input_texts("user")
+        .iter()
+        .any(|text| text.contains(parallel_spec_text));
+    let second_has_sdd_spec = requests[1]
+        .message_input_texts("user")
+        .iter()
+        .any(|text| text.contains(sdd_spec_text));
+
+    assert!(
+        first_has_parallel_spec,
+        "first request should include Parallel Priority spec"
+    );
+    assert!(
+        first_has_sdd_spec,
+        "first request should include SDD Planning spec"
+    );
+    assert!(
+        !second_has_parallel_spec,
+        "follow-up request should not include Parallel Priority spec"
+    );
+    assert!(
+        !second_has_sdd_spec,
+        "follow-up request should not include SDD Planning spec"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1257,7 +1640,8 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         model_info.slug.as_str(),
         None,
         Some("test@test.com".to_string()),
-        auth_manager.get_auth_mode(),
+        auth_manager.auth_mode().map(TelemetryAuthMode::from),
+        "test_originator".to_string(),
         false,
         "test".to_string(),
         SessionSource::Exec,
@@ -1269,6 +1653,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         provider.clone(),
         SessionSource::Exec,
         config.model_verbosity,
+        false,
         false,
         false,
         false,
@@ -1339,15 +1724,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
     });
 
     let mut stream = client_session
-        .stream(
-            &prompt,
-            &model_info,
-            &otel_manager,
-            effort,
-            summary,
-            true,
-            None,
-        )
+        .stream(&prompt, &model_info, &otel_manager, effort, summary, None)
         .await
         .expect("responses stream to start");
 

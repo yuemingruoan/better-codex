@@ -236,6 +236,7 @@ impl CommandPopup {
                     match_indices: indices.map(|v| v.into_iter().map(|i| i + 1).collect()),
                     display_shortcut: None,
                     description: Some(description),
+                    category_tag: None,
                     wrap_indent: None,
                     is_disabled: false,
                     disabled_reason: None,

@@ -2,6 +2,6 @@
 source: tui/src/history_cell.rs
 expression: rendered
 ---
-• 已运行 echo one
+• Ran echo one
   │ echo two
-  └ （无输出）
+  └ (no output)

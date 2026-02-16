@@ -16,6 +16,7 @@ pub enum SlashCommand {
     // more frequently used commands should be listed first.
     Model,
     Lang,
+    Spec,
     Approvals,
     Permissions,
     #[strum(serialize = "setup-elevated-sandbox")]
@@ -40,6 +41,9 @@ pub enum SlashCommand {
     SddDevelop,
     DebugConfig,
     SddDevelopParallels,
+    Statusline,
+    Ps,
+    Clean,
     Mcp,
     Apps,
     Logout,
@@ -47,7 +51,6 @@ pub enum SlashCommand {
     Exit,
     Feedback,
     Rollout,
-    Ps,
     Personality,
     TestApproval,
 }
@@ -72,8 +75,10 @@ impl SlashCommand {
             SlashCommand::Skills => tr(language, "slash_command.description.skills"),
             SlashCommand::Status => tr(language, "slash_command.description.status"),
             SlashCommand::Ps => tr(language, "slash_command.description.ps"),
+            SlashCommand::Clean => tr(language, "slash_command.description.clean"),
             SlashCommand::Model => tr(language, "slash_command.description.model"),
             SlashCommand::Lang => tr(language, "slash_command.description.lang"),
+            SlashCommand::Spec => tr(language, "slash_command.description.spec"),
             SlashCommand::Approvals => tr(language, "slash_command.description.approvals"),
             SlashCommand::Permissions => tr(language, "slash_command.description.permissions"),
             SlashCommand::ElevateSandbox => {
@@ -91,6 +96,7 @@ impl SlashCommand {
             SlashCommand::SddDevelopParallels => {
                 tr(language, "slash_command.description.sdd_develop_parallels")
             }
+            SlashCommand::Statusline => tr(language, "slash_command.description.statusline"),
             SlashCommand::Personality => tr(language, "slash_command.description.personality"),
             SlashCommand::Plan => tr(language, "slash_command.description.plan"),
             SlashCommand::Collab => tr(language, "slash_command.description.collab"),
@@ -129,6 +135,7 @@ impl SlashCommand {
             | SlashCommand::SddDevelopParallels
             | SlashCommand::Model
             | SlashCommand::Lang
+            | SlashCommand::Spec
             | SlashCommand::Personality
             | SlashCommand::Approvals
             | SlashCommand::Permissions
@@ -136,7 +143,8 @@ impl SlashCommand {
             | SlashCommand::Experimental
             | SlashCommand::Review
             | SlashCommand::Plan
-            | SlashCommand::Logout => false,
+            | SlashCommand::Logout
+            | SlashCommand::Statusline => false,
             SlashCommand::Diff
             | SlashCommand::Rename
             | SlashCommand::Mention
@@ -144,6 +152,7 @@ impl SlashCommand {
             | SlashCommand::Status
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
+            | SlashCommand::Clean
             | SlashCommand::Mcp
             | SlashCommand::Apps
             | SlashCommand::Feedback
@@ -170,4 +179,20 @@ pub fn built_in_slash_commands() -> Vec<(&'static str, SlashCommand)> {
         .filter(|command| command.is_visible())
         .map(|c| (c.command(), c))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SlashCommand;
+    use super::built_in_slash_commands;
+
+    #[test]
+    fn spec_command_is_available() {
+        let commands = built_in_slash_commands();
+        assert!(
+            commands
+                .iter()
+                .any(|(name, command)| *name == "spec" && *command == SlashCommand::Spec)
+        );
+    }
 }

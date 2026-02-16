@@ -8,6 +8,7 @@ pub use codex_protocol::config_types::AltScreenMode;
 pub use codex_protocol::config_types::ModeKind;
 pub use codex_protocol::config_types::Personality;
 pub use codex_protocol::config_types::WebSearchMode;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -49,6 +50,10 @@ pub struct McpServerConfig {
     /// When `false`, Codex skips initializing this MCP server.
     #[serde(default = "default_enabled")]
     pub enabled: bool,
+
+    /// When `true`, `codex exec` exits with an error if this MCP server fails to initialize.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub required: bool,
 
     /// Reason this server was disabled after applying requirements.
     #[serde(skip)]
@@ -114,6 +119,8 @@ pub(crate) struct RawMcpServerConfig {
     #[serde(default)]
     pub enabled: Option<bool>,
     #[serde(default)]
+    pub required: Option<bool>,
+    #[serde(default)]
     pub enabled_tools: Option<Vec<String>>,
     #[serde(default)]
     pub disabled_tools: Option<Vec<String>>,
@@ -138,6 +145,7 @@ impl<'de> Deserialize<'de> for McpServerConfig {
         };
         let tool_timeout_sec = raw.tool_timeout_sec;
         let enabled = raw.enabled.unwrap_or_else(default_enabled);
+        let required = raw.required.unwrap_or_default();
         let enabled_tools = raw.enabled_tools.clone();
         let disabled_tools = raw.disabled_tools.clone();
         let scopes = raw.scopes.clone();
@@ -192,6 +200,7 @@ impl<'de> Deserialize<'de> for McpServerConfig {
             startup_timeout_sec,
             tool_timeout_sec,
             enabled,
+            required,
             disabled_reason: None,
             enabled_tools,
             disabled_tools,
@@ -332,6 +341,44 @@ pub struct FeedbackConfigToml {
     pub enabled: Option<bool>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AppDisabledReason {
+    Unknown,
+    User,
+}
+
+impl fmt::Display for AppDisabledReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AppDisabledReason::Unknown => write!(f, "unknown"),
+            AppDisabledReason::User => write!(f, "user"),
+        }
+    }
+}
+
+/// Config values for a single app/connector.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct AppConfig {
+    /// When `false`, Codex does not surface this app.
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+
+    /// Reason this app was disabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disabled_reason: Option<AppDisabledReason>,
+}
+
+/// App/connector settings loaded from `config.toml`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct AppsConfigToml {
+    /// Per-app settings keyed by app ID (for example `[apps.google_drive]`).
+    #[serde(default, flatten)]
+    pub apps: HashMap<String, AppConfig>,
+}
+
 // ===== OTEL configuration =====
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
@@ -391,6 +438,9 @@ pub struct OtelConfigToml {
 
     /// Optional trace exporter
     pub trace_exporter: Option<OtelExporterKind>,
+
+    /// Optional metrics exporter
+    pub metrics_exporter: Option<OtelExporterKind>,
 }
 
 /// Effective OTEL settings after defaults are applied.
@@ -503,10 +553,85 @@ pub struct Tui {
     /// scrollback in terminal multiplexers like Zellij that follow the xterm spec.
     #[serde(default)]
     pub alternate_screen: AltScreenMode,
+
+    /// Ordered list of status line item identifiers.
+    ///
+    /// When set, the TUI renders the selected items as the status line.
+    #[serde(default)]
+    pub status_line: Option<Vec<String>>,
 }
 
 const fn default_true() -> bool {
     true
+}
+
+/// Configuration for built-in instruction specs injected at request time.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct SpecConfig {
+    /// When enabled, inject the "Parallel Priority" guidance into model requests.
+    #[serde(default)]
+    pub parallel_priority: bool,
+
+    /// When enabled, inject the SDD planning guidance into model requests.
+    #[serde(default)]
+    pub sdd_planning: bool,
+}
+
+/// Fixed built-in sub-agent preset names.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SubagentPreset {
+    Edit,
+    Read,
+    Grep,
+    Run,
+    Websearch,
+}
+
+impl SubagentPreset {
+    pub const fn as_config_key(self) -> &'static str {
+        match self {
+            SubagentPreset::Edit => "edit",
+            SubagentPreset::Read => "read",
+            SubagentPreset::Grep => "grep",
+            SubagentPreset::Run => "run",
+            SubagentPreset::Websearch => "websearch",
+        }
+    }
+}
+
+/// Model overrides for one built-in sub-agent preset.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct SubagentPresetConfig {
+    pub model: Option<String>,
+    pub reasoning_effort: Option<ReasoningEffort>,
+}
+
+impl Default for SubagentPresetConfig {
+    fn default() -> Self {
+        Self {
+            model: Some("gpt-5.3-codex".to_string()),
+            reasoning_effort: Some(ReasoningEffort::Low),
+        }
+    }
+}
+
+/// Per-preset model overrides for built-in sub-agent presets.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct SubagentPresetsConfig {
+    #[serde(default)]
+    pub edit: SubagentPresetConfig,
+    #[serde(default)]
+    pub read: SubagentPresetConfig,
+    #[serde(default)]
+    pub grep: SubagentPresetConfig,
+    #[serde(default)]
+    pub run: SubagentPresetConfig,
+    #[serde(default)]
+    pub websearch: SubagentPresetConfig,
 }
 
 /// Settings for notices we display to users via the tui and app-server clients
@@ -708,6 +833,7 @@ mod tests {
             }
         );
         assert!(cfg.enabled);
+        assert!(!cfg.required);
         assert!(cfg.enabled_tools.is_none());
         assert!(cfg.disabled_tools.is_none());
     }
@@ -814,6 +940,20 @@ mod tests {
         .expect("should deserialize disabled server config");
 
         assert!(!cfg.enabled);
+        assert!(!cfg.required);
+    }
+
+    #[test]
+    fn deserialize_required_server_config() {
+        let cfg: McpServerConfig = toml::from_str(
+            r#"
+            command = "echo"
+            required = true
+        "#,
+        )
+        .expect("should deserialize required server config");
+
+        assert!(cfg.required);
     }
 
     #[test]
@@ -954,5 +1094,20 @@ mod tests {
             err.to_string().contains("bearer_token is not supported"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn subagent_presets_default_to_gpt_5_3_codex_with_low_reasoning() {
+        let expected = SubagentPresetConfig {
+            model: Some("gpt-5.3-codex".to_string()),
+            reasoning_effort: Some(ReasoningEffort::Low),
+        };
+        let defaults = SubagentPresetsConfig::default();
+
+        assert_eq!(defaults.edit, expected);
+        assert_eq!(defaults.read, expected);
+        assert_eq!(defaults.grep, expected);
+        assert_eq!(defaults.run, expected);
+        assert_eq!(defaults.websearch, expected);
     }
 }

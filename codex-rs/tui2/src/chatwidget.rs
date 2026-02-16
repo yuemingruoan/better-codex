@@ -28,11 +28,11 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
-use codex_app_server_protocol::AuthMode;
 use codex_backend_client::Client as BackendClient;
 use codex_core::config::Config;
 use codex_core::config::ConstraintResult;
 use codex_core::config::types::Notifications;
+use codex_core::config::types::SubagentPreset;
 use codex_core::features::Feature;
 use codex_core::git_info::current_branch_name;
 use codex_core::git_info::local_git_branches;
@@ -77,6 +77,7 @@ use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::RateLimitSnapshot;
+use codex_core::protocol::RequestUserInputEvent;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::ReviewTarget;
 use codex_core::protocol::SddGitAction;
@@ -95,11 +96,17 @@ use codex_core::protocol::ViewImageToolCallEvent;
 use codex_core::protocol::WarningEvent;
 use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
+use codex_core::skills::model::SkillDependencies;
+use codex_core::skills::model::SkillInterface;
 use codex_core::skills::model::SkillMetadata;
+use codex_core::skills::model::SkillToolDependency;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ElicitationRequestEvent;
+use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::SandboxMode;
+use codex_protocol::config_types::Settings as CollaborationSettings;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::user_input::UserInput;
 use crossterm::event::KeyCode;
@@ -135,6 +142,7 @@ use crate::bottom_pane::ImageAttachment;
 use crate::bottom_pane::InputResult;
 use crate::bottom_pane::QUIT_SHORTCUT_TIMEOUT;
 use crate::bottom_pane::SelectionAction;
+use crate::bottom_pane::SelectionInteractionMode;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::custom_prompt_view::CustomPromptView;
@@ -430,7 +438,7 @@ struct SddDevelopState {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum SddGitPendingAction {
-    CreateBranch { description: String },
+    CreateBranchForPlan { description: String },
     FinalizeMerge,
     AbandonBranch,
 }
@@ -510,6 +518,8 @@ pub(crate) struct ChatWidget {
     suppress_session_configured_redraw: bool,
     // User messages queued while a turn is in progress
     queued_user_messages: VecDeque<UserMessage>,
+    // request_user_input prompts that have been surfaced but not finalized.
+    pending_request_user_input: VecDeque<RequestUserInputEvent>,
     // Pending notification to show when unfocused on next Draw
     pending_notification: Option<Notification>,
     /// When `Some`, the user has pressed a quit shortcut and the second press
@@ -545,6 +555,8 @@ pub(crate) struct ChatWidget {
     sdd_git_action_failed: bool,
     // When true, start a fresh session after current turn completes (used for SDD abandon).
     sdd_new_session_after_cleanup: bool,
+    // Previous spec.sdd_planning value before SDD workflow auto-enables it.
+    sdd_spec_sdd_planning_restore: Option<bool>,
 }
 
 /// Snapshot of active-cell state that affects transcript overlay rendering.
@@ -651,7 +663,7 @@ impl ChatWidget {
             .set_history_metadata(event.history_log_id, event.history_entry_count);
         self.set_skills(None);
         self.conversation_id = Some(event.session_id);
-        self.current_rollout_path = Some(event.rollout_path.clone());
+        self.current_rollout_path = event.rollout_path.clone();
         let initial_messages = event.initial_messages.clone();
         let model_for_header = event.model.clone();
         self.model = Some(model_for_header.clone());
@@ -778,6 +790,7 @@ impl ChatWidget {
     // Raw reasoning uses the same flow as summarized reasoning
 
     fn on_task_started(&mut self) {
+        self.pending_request_user_input.clear();
         self.agent_turn_running = true;
         self.bottom_pane.clear_quit_shortcut_hint();
         self.quit_shortcut_expires_at = None;
@@ -798,6 +811,7 @@ impl ChatWidget {
         self.agent_turn_running = false;
         self.update_task_running_state();
         self.running_commands.clear();
+        self.pending_request_user_input.clear();
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
         self.request_redraw();
@@ -821,24 +835,31 @@ impl ChatWidget {
                 return;
             }
             match action {
-                SddGitPendingAction::CreateBranch { description } => {
+                SddGitPendingAction::CreateBranchForPlan { description } => {
                     let workflow = self
                         .sdd_state
                         .as_ref()
                         .map_or(SddWorkflow::Standard, |state| state.workflow);
-                    let prompt = self.build_sdd_exec_prompt(&description, workflow);
+                    let prompt = self.build_sdd_plan_prompt(&description, workflow);
                     self.submit_user_message(prompt.into());
-                    if let Some(state) = self.sdd_state.as_mut() {
-                        state.stage = SddDevelopStage::AwaitDevDecision;
-                    }
+                    let plan_request_hint = if workflow == SddWorkflow::Parallels {
+                        tr(
+                            self.config.language,
+                            "chatwidget.sdd.plan_request_hint_parallels",
+                        )
+                        .to_string()
+                    } else {
+                        tr(self.config.language, "chatwidget.sdd.plan_request_hint").to_string()
+                    };
                     self.add_info_message(
-                        tr(self.config.language, "chatwidget.sdd.exec_sent").to_string(),
-                        Some(tr(self.config.language, "chatwidget.sdd.exec_sent_hint").to_string()),
+                        tr(self.config.language, "chatwidget.sdd.plan_request_sent").to_string(),
+                        Some(plan_request_hint),
                     );
-                    self.open_sdd_dev_options();
+                    self.open_sdd_plan_options();
                 }
                 SddGitPendingAction::FinalizeMerge => {
                     self.sdd_state = None;
+                    self.restore_sdd_planning_after_workflow();
                     self.add_info_message(
                         tr(self.config.language, "chatwidget.sdd.merge_completed").to_string(),
                         None,
@@ -846,6 +867,7 @@ impl ChatWidget {
                 }
                 SddGitPendingAction::AbandonBranch => {
                     self.sdd_state = None;
+                    self.restore_sdd_planning_after_workflow();
                     self.sdd_new_session_after_cleanup = true;
                     self.add_info_message(
                         tr(self.config.language, "chatwidget.sdd.branch_deleted").to_string(),
@@ -1040,6 +1062,8 @@ impl ChatWidget {
             self.sdd_git_action_failed = true;
         }
         self.finalize_turn();
+        self.pending_request_user_input.clear();
+        self.interrupts.take_request_user_input();
         self.add_to_history(history_cell::new_error_event(message));
         self.request_redraw();
 
@@ -1153,6 +1177,10 @@ impl ChatWidget {
     /// When there are queued user messages, restore them into the composer
     /// separated by newlines rather than auto‑submitting the next one.
     fn on_interrupted_turn(&mut self, reason: TurnAbortReason) {
+        let queued_request_user_input = self.interrupts.take_request_user_input();
+        self.pending_request_user_input
+            .extend(queued_request_user_input);
+
         // Finalize, log a gentle prompt, and clear running state.
         self.finalize_turn();
 
@@ -1181,6 +1209,16 @@ impl ChatWidget {
             // Clear the queue and update the status indicator list.
             self.queued_user_messages.clear();
             self.refresh_queued_user_messages();
+        }
+
+        if reason == TurnAbortReason::Interrupted {
+            let pending_requests: Vec<_> = self.pending_request_user_input.drain(..).collect();
+            for request in pending_requests {
+                let lines = self.request_user_input_history_lines(&request, true);
+                self.add_boxed_history(Box::new(PlainHistoryCell::new(lines)));
+            }
+        } else {
+            self.pending_request_user_input.clear();
         }
 
         self.request_redraw();
@@ -1213,6 +1251,14 @@ impl ChatWidget {
         self.defer_or_handle(
             |q| q.push_elicitation(ev),
             |s| s.handle_elicitation_request_now(ev2),
+        );
+    }
+
+    fn on_request_user_input(&mut self, ev: RequestUserInputEvent) {
+        let ev2 = ev.clone();
+        self.defer_or_handle(
+            |q| q.push_user_input(ev),
+            |s| s.handle_request_user_input_now(ev2),
         );
     }
 
@@ -1390,7 +1436,17 @@ impl ChatWidget {
     }
 
     fn on_collab_waiting_begin(&mut self, ev: CollabWaitingBeginEvent) {
-        let receiver_id = ev.receiver_thread_id.to_string();
+        let receiver_id = ev
+            .receiver_thread_ids
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let receiver_id = if receiver_id.is_empty() {
+            "-".to_string()
+        } else {
+            receiver_id
+        };
         let message = tr_args(
             self.config.language,
             "chatwidget.collab.waiting_begin",
@@ -1400,8 +1456,30 @@ impl ChatWidget {
     }
 
     fn on_collab_waiting_end(&mut self, ev: CollabWaitingEndEvent) {
-        let receiver_id = ev.receiver_thread_id.to_string();
-        let status = self.collab_status_label(&ev.status);
+        let mut statuses: Vec<(String, String)> = ev
+            .statuses
+            .iter()
+            .map(|(thread_id, status)| (thread_id.to_string(), self.collab_status_label(status)))
+            .collect();
+        statuses.sort_by(|(left, _), (right, _)| left.cmp(right));
+
+        let (receiver_id, status) = match statuses.as_slice() {
+            [] => ("-".to_string(), "-".to_string()),
+            [(receiver_id, status)] => (receiver_id.clone(), status.clone()),
+            _ => {
+                let receiver_id = statuses
+                    .iter()
+                    .map(|(thread_id, _)| thread_id.clone())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let status = statuses
+                    .iter()
+                    .map(|(thread_id, status)| format!("{thread_id}: {status}"))
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                (receiver_id, status)
+            }
+        };
         let message = tr_args(
             self.config.language,
             "chatwidget.collab.waiting_end",
@@ -1699,6 +1777,103 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    fn request_user_input_history_lines(
+        &self,
+        ev: &RequestUserInputEvent,
+        interrupted: bool,
+    ) -> Vec<Line<'static>> {
+        let language = self.config.language;
+        let question_count = ev.questions.len();
+        let question_count_text = question_count.to_string();
+        let unanswered = tr_args(
+            language,
+            "request_user_input.progress.unanswered",
+            &[("count", &question_count_text)],
+        );
+
+        let mut lines: Vec<Line<'static>> = vec![
+            vec![
+                "• ".dim(),
+                "request_user_input".bold(),
+                format!(" [{}]", ev.call_id).dim(),
+                " ".into(),
+                unanswered.dim(),
+            ]
+            .into(),
+        ];
+
+        let detail = if interrupted {
+            tr(language, "chatwidget.stream.interrupted")
+        } else {
+            tr(language, "request_user_input.hint.answer_questions")
+        };
+        lines.push(vec!["  ".into(), detail.dim()].into());
+
+        if ev.questions.is_empty() {
+            lines.push(
+                vec![
+                    "  ".into(),
+                    tr(language, "request_user_input.progress.none").dim(),
+                ]
+                .into(),
+            );
+            return lines;
+        }
+
+        for (index, question) in ev.questions.iter().enumerate() {
+            let question_index = (index + 1).to_string();
+            let progress = tr_args(
+                language,
+                "request_user_input.progress.question",
+                &[("index", &question_index), ("total", &question_count_text)],
+            );
+            lines.push(vec!["  ".into(), progress.dim()].into());
+
+            if !question.header.trim().is_empty() {
+                lines.push(Line::from(format!("    {}", question.header)));
+            }
+            if !question.question.trim().is_empty() {
+                lines.push(Line::from(format!("    {}", question.question)));
+            }
+
+            if let Some(options) = &question.options {
+                if options.is_empty() {
+                    lines.push(
+                        vec![
+                            "    ".into(),
+                            tr(language, "request_user_input.empty.options").dim(),
+                        ]
+                        .into(),
+                    );
+                } else {
+                    for option in options {
+                        if option.description.trim().is_empty() {
+                            lines.push(Line::from(format!("      - {}", option.label)));
+                        } else {
+                            lines.push(Line::from(format!(
+                                "      - {}: {}",
+                                option.label, option.description
+                            )));
+                        }
+                    }
+                }
+            }
+        }
+
+        lines
+    }
+
+    pub(crate) fn handle_request_user_input_now(&mut self, ev: RequestUserInputEvent) {
+        self.flush_answer_stream_with_separator();
+        self.pending_request_user_input
+            .retain(|pending| pending.call_id != ev.call_id);
+        self.pending_request_user_input.push_back(ev.clone());
+        self.add_boxed_history(Box::new(PlainHistoryCell::new(
+            self.request_user_input_history_lines(&ev, false),
+        )));
+        self.request_redraw();
+    }
+
     pub(crate) fn handle_exec_begin_now(&mut self, ev: ExecCommandBeginEvent) {
         // Ensure the status indicator is visible while the command runs.
         self.running_commands.insert(
@@ -1784,6 +1959,14 @@ impl ChatWidget {
             duration,
             result,
         } = ev;
+        let result = result.and_then(|result| {
+            serde_json::to_value(result)
+                .map_err(|err| format!("failed to serialize MCP tool result: {err}"))
+                .and_then(|value| {
+                    serde_json::from_value::<mcp_types::CallToolResult>(value)
+                        .map_err(|err| format!("failed to parse MCP tool result: {err}"))
+                })
+        });
 
         let extra_cell = match self
             .active_cell
@@ -1894,6 +2077,7 @@ impl ChatWidget {
             retry_status_header: None,
             conversation_id: None,
             queued_user_messages: VecDeque::new(),
+            pending_request_user_input: VecDeque::new(),
             show_welcome_banner: is_first_run,
             suppress_session_configured_redraw: false,
             pending_notification: None,
@@ -1912,6 +2096,7 @@ impl ChatWidget {
             sdd_pending_git_action: None,
             sdd_git_action_failed: false,
             sdd_new_session_after_cleanup: false,
+            sdd_spec_sdd_planning_restore: None,
         };
 
         widget.prefetch_rate_limits();
@@ -2003,6 +2188,7 @@ impl ChatWidget {
             retry_status_header: None,
             conversation_id: None,
             queued_user_messages: VecDeque::new(),
+            pending_request_user_input: VecDeque::new(),
             show_welcome_banner: false,
             suppress_session_configured_redraw: true,
             pending_notification: None,
@@ -2021,6 +2207,7 @@ impl ChatWidget {
             sdd_pending_git_action: None,
             sdd_git_action_failed: false,
             sdd_new_session_after_cleanup: false,
+            sdd_spec_sdd_planning_restore: None,
         };
 
         widget.prefetch_rate_limits();
@@ -2239,6 +2426,15 @@ impl ChatWidget {
             }
             SlashCommand::Lang => {
                 self.open_language_popup();
+            }
+            SlashCommand::Spec => {
+                self.open_spec_popup();
+            }
+            SlashCommand::Preset => {
+                self.open_preset_popup();
+            }
+            SlashCommand::Collab => {
+                self.open_collab_popup();
             }
             SlashCommand::Approvals => {
                 self.open_approvals_popup();
@@ -2462,22 +2658,64 @@ impl ChatWidget {
             self.sdd_state = Some(SddDevelopState {
                 workflow,
                 description: desc.clone(),
-                branch_name,
+                branch_name: branch_name.clone(),
                 base_branch: None,
                 stage: SddDevelopStage::AwaitPlanDecision,
             });
-            let prompt = self.build_sdd_plan_prompt(&desc, workflow);
-            self.submit_user_message(prompt.into());
-            let plan_request_hint = if workflow == SddWorkflow::Parallels {
-                tr(language, "chatwidget.sdd.plan_request_hint_parallels").to_string()
-            } else {
-                tr(language, "chatwidget.sdd.plan_request_hint").to_string()
+            self.enable_sdd_planning_for_workflow();
+            self.set_sdd_collaboration_mode(ModeKind::Plan);
+            if workflow == SddWorkflow::Parallels {
+                let prompt = self.build_sdd_plan_prompt(&desc, workflow);
+                self.submit_user_message(prompt.into());
+                self.add_info_message(
+                    tr(language, "chatwidget.sdd.plan_request_sent").to_string(),
+                    Some(tr(language, "chatwidget.sdd.plan_request_hint_parallels").to_string()),
+                );
+                self.open_sdd_plan_options();
+                return;
+            }
+
+            let base_branch = match std::process::Command::new("git")
+                .arg("rev-parse")
+                .arg("--abbrev-ref")
+                .arg("HEAD")
+                .current_dir(&self.config.cwd)
+                .output()
+            {
+                Ok(output) if output.status.success() => {
+                    let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    if branch.is_empty() || branch == "HEAD" {
+                        self.add_error_message(
+                            tr(language, "chatwidget.sdd.base_branch_unknown").to_string(),
+                        );
+                        return;
+                    }
+                    branch
+                }
+                _ => {
+                    self.add_error_message(
+                        tr(language, "chatwidget.sdd.base_branch_unknown").to_string(),
+                    );
+                    return;
+                }
             };
+
+            if let Some(state) = self.sdd_state.as_mut() {
+                state.base_branch = Some(base_branch.clone());
+            }
+            self.sdd_pending_git_action =
+                Some(SddGitPendingAction::CreateBranchForPlan { description: desc });
+            self.sdd_git_action_failed = false;
+            self.submit_op(Op::SddGitAction {
+                action: SddGitAction::CreateBranch {
+                    name: branch_name,
+                    base: base_branch,
+                },
+            });
             self.add_info_message(
-                tr(language, "chatwidget.sdd.plan_request_sent").to_string(),
-                Some(plan_request_hint),
+                tr(language, "chatwidget.sdd.branch_create_started").to_string(),
+                None,
             );
-            self.open_sdd_plan_options();
             return;
         }
 
@@ -2632,6 +2870,7 @@ impl ChatWidget {
 
         self.sdd_pending_plan_rework_prompt = None;
         self.sdd_open_plan_options_after_task = false;
+        self.set_sdd_collaboration_mode(ModeKind::Default);
 
         if workflow == SddWorkflow::Parallels {
             if let Some(base_branch) = current_branch_name(&self.config.cwd).await
@@ -2652,38 +2891,35 @@ impl ChatWidget {
             return;
         }
 
-        let branch_name = match self.sdd_state.as_ref() {
-            Some(state) => state.branch_name.clone(),
-            None => {
-                self.add_error_message(tr(language, "chatwidget.sdd.branch_unknown").to_string());
-                return;
+        if self
+            .sdd_state
+            .as_ref()
+            .is_some_and(|state| state.base_branch.is_none())
+        {
+            let base_branch = match current_branch_name(&self.config.cwd).await {
+                Some(branch) => branch,
+                None => {
+                    self.add_error_message(
+                        tr(language, "chatwidget.sdd.base_branch_unknown").to_string(),
+                    );
+                    return;
+                }
+            };
+            if let Some(state) = self.sdd_state.as_mut() {
+                state.base_branch = Some(base_branch);
             }
-        };
-        let base_branch = match current_branch_name(&self.config.cwd).await {
-            Some(branch) => branch,
-            None => {
-                self.add_error_message(
-                    tr(language, "chatwidget.sdd.base_branch_unknown").to_string(),
-                );
-                return;
-            }
-        };
-        if let Some(state) = self.sdd_state.as_mut() {
-            state.base_branch = Some(base_branch.clone());
         }
 
-        self.sdd_pending_git_action = Some(SddGitPendingAction::CreateBranch { description });
-        self.sdd_git_action_failed = false;
-        self.submit_op(Op::SddGitAction {
-            action: SddGitAction::CreateBranch {
-                name: branch_name,
-                base: base_branch,
-            },
-        });
+        if let Some(state) = self.sdd_state.as_mut() {
+            state.stage = SddDevelopStage::AwaitDevDecision;
+        }
+        let prompt = self.build_sdd_exec_prompt(&description, workflow);
+        self.submit_user_message(prompt.into());
         self.add_info_message(
-            tr(language, "chatwidget.sdd.branch_create_started").to_string(),
-            None,
+            tr(language, "chatwidget.sdd.exec_sent").to_string(),
+            Some(tr(language, "chatwidget.sdd.exec_sent_hint").to_string()),
         );
+        self.open_sdd_dev_options();
     }
 
     pub(crate) fn on_sdd_plan_rework(&mut self) {
@@ -2767,6 +3003,7 @@ impl ChatWidget {
             self.sdd_pending_git_action = None;
             self.sdd_git_action_failed = false;
             self.submit_user_message(prompt.into());
+            self.restore_sdd_planning_after_workflow();
             self.add_info_message(
                 tr(language, "chatwidget.sdd.merge_guidance_sent").to_string(),
                 Some(tr(language, "chatwidget.sdd.merge_guidance_hint_parallels").to_string()),
@@ -2870,9 +3107,9 @@ impl ChatWidget {
             )
         };
         if template.is_empty() {
-            description_block
+            self.inject_sdd_planning_prompt(description_block)
         } else {
-            format!("{template}\n\n{description_block}")
+            self.inject_sdd_planning_prompt(format!("{template}\n\n{description_block}"))
         }
     }
 
@@ -2910,7 +3147,9 @@ impl ChatWidget {
     }
 
     fn build_sdd_plan_rework_prompt(&self, _description: &str) -> String {
-        tr(self.config.language, "chatwidget.sdd.plan_rework_prompt").to_string()
+        self.inject_sdd_planning_prompt(
+            tr(self.config.language, "chatwidget.sdd.plan_rework_prompt").to_string(),
+        )
     }
 
     fn build_sdd_exec_prompt(&self, description: &str, workflow: SddWorkflow) -> String {
@@ -2924,9 +3163,9 @@ impl ChatWidget {
             tr(self.config.language, "chatwidget.sdd.requirement_label")
         );
         if template.is_empty() {
-            description_block
+            self.inject_sdd_planning_prompt(description_block)
         } else {
-            format!("{template}\n\n{description_block}")
+            self.inject_sdd_planning_prompt(format!("{template}\n\n{description_block}"))
         }
     }
 
@@ -2947,10 +3186,67 @@ impl ChatWidget {
             tr(self.config.language, "chatwidget.sdd.branch_label")
         );
         if template.is_empty() {
-            context_block
+            self.inject_sdd_planning_prompt(context_block)
         } else {
-            format!("{template}\n\n{context_block}")
+            self.inject_sdd_planning_prompt(format!("{template}\n\n{context_block}"))
         }
+    }
+
+    fn enable_sdd_planning_for_workflow(&mut self) {
+        if self.sdd_spec_sdd_planning_restore.is_none() {
+            self.sdd_spec_sdd_planning_restore = Some(self.config.spec.sdd_planning);
+        }
+        if self.config.spec.sdd_planning {
+            return;
+        }
+        self.config.spec.sdd_planning = true;
+        self.submit_op(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            collaboration_mode: None,
+            personality: None,
+            spec_parallel_priority: None,
+            spec_sdd_planning: Some(true),
+        });
+    }
+
+    fn restore_sdd_planning_after_workflow(&mut self) {
+        let Some(previous) = self.sdd_spec_sdd_planning_restore.take() else {
+            return;
+        };
+        if previous == self.config.spec.sdd_planning {
+            return;
+        }
+        self.config.spec.sdd_planning = previous;
+        self.submit_op(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            collaboration_mode: None,
+            personality: None,
+            spec_parallel_priority: None,
+            spec_sdd_planning: Some(previous),
+        });
+    }
+
+    fn inject_sdd_planning_prompt(&self, message: String) -> String {
+        if self.config.spec.sdd_planning {
+            return message;
+        }
+        let planning_prompt = tr(self.config.language, "prompt.spec.sdd_planning").trim();
+        if planning_prompt.is_empty() {
+            return message;
+        }
+        format!("{planning_prompt}\n\n{message}")
     }
     fn dispatch_command_with_args(&mut self, cmd: SlashCommand, args: String) {
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
@@ -3221,6 +3517,7 @@ impl ChatWidget {
 
         match msg {
             EventMsg::AgentMessageDelta(_)
+            | EventMsg::PlanDelta(_)
             | EventMsg::AgentReasoningDelta(_)
             | EventMsg::TerminalInteraction(_)
             | EventMsg::ExecCommandOutputDelta(_) => {}
@@ -3231,6 +3528,7 @@ impl ChatWidget {
 
         match msg {
             EventMsg::SessionConfigured(e) => self.on_session_configured(e),
+            EventMsg::ThreadNameUpdated(_) => {}
             EventMsg::AgentMessage(AgentMessageEvent { message }) => self.on_agent_message(message),
             EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
                 self.on_agent_message_delta(delta)
@@ -3270,6 +3568,7 @@ impl ChatWidget {
                 }
             },
             EventMsg::PlanUpdate(update) => self.on_plan_update(update),
+            EventMsg::PlanDelta(_) => {}
             EventMsg::ExecApprovalRequest(ev) => {
                 // For replayed events, synthesize an empty id (these should not occur).
                 self.on_exec_approval_request(id.unwrap_or_default(), ev)
@@ -3279,6 +3578,9 @@ impl ChatWidget {
             }
             EventMsg::ElicitationRequest(ev) => {
                 self.on_elicitation_request(ev);
+            }
+            EventMsg::RequestUserInput(ev) => {
+                self.on_request_user_input(ev);
             }
             EventMsg::ExecCommandBegin(ev) => self.on_exec_command_begin(ev),
             EventMsg::TerminalInteraction(delta) => self.on_terminal_interaction(delta),
@@ -3295,6 +3597,7 @@ impl ChatWidget {
             EventMsg::McpListToolsResponse(ev) => self.on_list_mcp_tools(ev),
             EventMsg::ListCustomPromptsResponse(ev) => self.on_list_custom_prompts(ev),
             EventMsg::ListSkillsResponse(ev) => self.on_list_skills(ev),
+            EventMsg::ListRemoteSkillsResponse(_) | EventMsg::RemoteSkillDownloaded(_) => {}
             EventMsg::SkillsUpdateAvailable => {
                 self.submit_op(Op::ListSkills {
                     cwds: Vec::new(),
@@ -3334,13 +3637,15 @@ impl ChatWidget {
             EventMsg::CollabWaitingEnd(ev) => self.on_collab_waiting_end(ev),
             EventMsg::CollabCloseBegin(ev) => self.on_collab_close_begin(ev),
             EventMsg::CollabCloseEnd(ev) => self.on_collab_close_end(ev),
+            EventMsg::CollabResumeBegin(_) | EventMsg::CollabResumeEnd(_) => {}
             EventMsg::RawResponseItem(_)
             | EventMsg::ThreadRolledBack(_)
             | EventMsg::ItemStarted(_)
             | EventMsg::ItemCompleted(_)
             | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::ReasoningContentDelta(_)
-            | EventMsg::ReasoningRawContentDelta(_) => {}
+            | EventMsg::ReasoningRawContentDelta(_)
+            | EventMsg::DynamicToolCallRequest(_) => {}
         }
     }
 
@@ -3519,7 +3824,11 @@ impl ChatWidget {
     fn prefetch_rate_limits(&mut self) {
         self.stop_rate_limit_poller();
 
-        if self.auth_manager.auth_cached().map(|auth| auth.mode) != Some(AuthMode::ChatGPT) {
+        if !self
+            .auth_manager
+            .auth_cached()
+            .is_some_and(|auth| auth.is_chatgpt_auth())
+        {
             return;
         }
 
@@ -3532,7 +3841,7 @@ impl ChatWidget {
 
             loop {
                 if let Some(auth) = auth_manager.auth().await
-                    && auth.mode == AuthMode::ChatGPT
+                    && auth.is_chatgpt_auth()
                     && let Some(snapshot) = fetch_rate_limits(base_url.clone(), auth).await
                 {
                     app_event_tx.send(AppEvent::RateLimitSnapshotFetched(snapshot));
@@ -3588,9 +3897,14 @@ impl ChatWidget {
                 cwd: None,
                 approval_policy: None,
                 sandbox_policy: None,
+                windows_sandbox_level: None,
                 model: Some(switch_model.clone()),
                 effort: Some(Some(default_effort)),
                 summary: None,
+                collaboration_mode: None,
+                personality: None,
+                spec_parallel_priority: None,
+                spec_sdd_planning: None,
             }));
             tx.send(AppEvent::UpdateModel(switch_model.clone()));
             tx.send(AppEvent::UpdateReasoningEffort(Some(default_effort)));
@@ -3704,6 +4018,321 @@ impl ChatWidget {
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some(tr(ui_language, "chatwidget.language_popup.title").to_string()),
             footer_hint: Some(standard_popup_hint_line(ui_language)),
+            items,
+            header: Box::new(()),
+            ..Default::default()
+        });
+    }
+
+    pub(crate) fn open_spec_popup(&mut self) {
+        let language = self.config.language;
+        let collab_enabled = self.config.features.enabled(Feature::Collab);
+        let parallel_priority_enabled = self.config.spec.parallel_priority;
+        let can_toggle_parallel_priority = collab_enabled || parallel_priority_enabled;
+        let parallel_priority_description_key = if can_toggle_parallel_priority {
+            "chatwidget.spec_popup.parallel_priority_label_desc"
+        } else {
+            "chatwidget.spec_popup.parallel_priority_requires_collab_desc"
+        };
+        let items = vec![SelectionItem {
+            name: tr(language, "chatwidget.spec_popup.parallel_priority_label").to_string(),
+            description: Some(tr(language, parallel_priority_description_key).to_string()),
+            is_current: parallel_priority_enabled,
+            actions: if can_toggle_parallel_priority {
+                Self::spec_parallel_priority_selection_actions(!parallel_priority_enabled)
+            } else {
+                Vec::new()
+            },
+            dismiss_on_select: false,
+            ..Default::default()
+        }];
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some(tr(language, "chatwidget.spec_popup.title").to_string()),
+            subtitle: Some(tr(language, "chatwidget.spec_popup.subtitle").to_string()),
+            footer_hint: Some(tr(language, "chatwidget.spec_popup.checkbox_hint").into()),
+            items,
+            interaction_mode: SelectionInteractionMode::MultiSelect,
+            header: Box::new(()),
+            ..Default::default()
+        });
+    }
+
+    pub(crate) fn open_collab_popup(&mut self) {
+        let language = self.config.language;
+        let fallback_model = self
+            .current_model()
+            .unwrap_or_else(|| self.model_display_name())
+            .to_string();
+        let fallback_effort = self.config.model_reasoning_effort;
+        let items = vec![
+            SelectionItem {
+                name: tr(language, "chatwidget.collab_popup.plan").to_string(),
+                description: Some(tr(language, "chatwidget.collab_popup.plan_desc").to_string()),
+                actions: Self::collab_feature_selection_actions(
+                    Some(ModeKind::Plan),
+                    true,
+                    fallback_model.clone(),
+                    fallback_effort,
+                ),
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: tr(language, "chatwidget.collab_popup.proxy").to_string(),
+                description: Some(tr(language, "chatwidget.collab_popup.proxy_desc").to_string()),
+                actions: Self::collab_feature_selection_actions(
+                    Some(ModeKind::Default),
+                    true,
+                    fallback_model.clone(),
+                    fallback_effort,
+                ),
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: tr(language, "chatwidget.collab_popup.close").to_string(),
+                description: Some(tr(language, "chatwidget.collab_popup.close_desc").to_string()),
+                actions: Self::collab_feature_selection_actions(
+                    None,
+                    false,
+                    fallback_model,
+                    fallback_effort,
+                ),
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some(tr(language, "chatwidget.collab_popup.title").to_string()),
+            subtitle: Some(tr(language, "chatwidget.collab_popup.subtitle").to_string()),
+            footer_hint: Some(tr(language, "chatwidget.collab_popup.hint").into()),
+            items,
+            header: Box::new(()),
+            ..Default::default()
+        });
+    }
+
+    pub(crate) fn open_preset_popup(&mut self) {
+        let language = self.config.language;
+        let items = [
+            SubagentPreset::Edit,
+            SubagentPreset::Read,
+            SubagentPreset::Grep,
+            SubagentPreset::Run,
+            SubagentPreset::Websearch,
+        ]
+        .into_iter()
+        .map(|preset| SelectionItem {
+            name: Self::subagent_preset_label(language, preset).to_string(),
+            description: Some(
+                match preset {
+                    SubagentPreset::Edit => {
+                        tr(language, "chatwidget.preset_popup.preset_edit_desc")
+                    }
+                    SubagentPreset::Read => {
+                        tr(language, "chatwidget.preset_popup.preset_read_desc")
+                    }
+                    SubagentPreset::Grep => {
+                        tr(language, "chatwidget.preset_popup.preset_grep_desc")
+                    }
+                    SubagentPreset::Run => tr(language, "chatwidget.preset_popup.preset_run_desc"),
+                    SubagentPreset::Websearch => {
+                        tr(language, "chatwidget.preset_popup.preset_websearch_desc")
+                    }
+                }
+                .to_string(),
+            ),
+            is_current: false,
+            actions: Self::subagent_preset_open_actions(preset),
+            dismiss_on_select: true,
+            ..Default::default()
+        })
+        .collect();
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some(tr(language, "chatwidget.preset_popup.title").to_string()),
+            subtitle: Some(tr(language, "chatwidget.preset_popup.subtitle").to_string()),
+            footer_hint: Some(standard_popup_hint_line(language)),
+            items,
+            header: Box::new(()),
+            ..Default::default()
+        });
+    }
+
+    pub(crate) fn open_subagent_preset_actions(&mut self, preset: SubagentPreset) {
+        let language = self.config.language;
+        let preset_label = Self::subagent_preset_label(language, preset);
+        let preset_config = self.subagent_preset_config(preset);
+        let model_description = tr_args(
+            language,
+            "chatwidget.preset_popup.current_model_desc",
+            &[("model", preset_config.model.as_deref().unwrap_or("-"))],
+        );
+        let reasoning_description = tr_args(
+            language,
+            "chatwidget.preset_popup.current_reasoning_desc",
+            &[(
+                "reasoning",
+                preset_config
+                    .reasoning_effort
+                    .map(|effort| Self::reasoning_effort_label(language, effort))
+                    .unwrap_or("-"),
+            )],
+        );
+
+        let items = vec![
+            SelectionItem {
+                name: tr(language, "chatwidget.preset_popup.action_set_model").to_string(),
+                description: Some(model_description),
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::OpenSubagentPresetModelPicker { preset });
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: tr(language, "chatwidget.preset_popup.action_set_reasoning").to_string(),
+                description: Some(reasoning_description),
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::OpenSubagentPresetReasoningPicker { preset });
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some(tr(language, "chatwidget.preset_popup.title").to_string()),
+            subtitle: Some(tr_args(
+                language,
+                "chatwidget.preset_popup.actions_subtitle",
+                &[("preset", preset_label)],
+            )),
+            footer_hint: Some(standard_popup_hint_line(language)),
+            items,
+            header: Box::new(()),
+            ..Default::default()
+        });
+    }
+
+    pub(crate) fn open_subagent_preset_model_picker(&mut self, preset: SubagentPreset) {
+        let language = self.config.language;
+        let models = match self.models_manager.try_list_models(&self.config) {
+            Ok(models) => models,
+            Err(_) => {
+                self.add_info_message(
+                    tr(language, "chatwidget.model_popup.updating").to_string(),
+                    None,
+                );
+                return;
+            }
+        };
+
+        let current_model = self.subagent_preset_config(preset).model.as_deref();
+        let mut items: Vec<SelectionItem> = models
+            .into_iter()
+            .filter(|model| model.show_in_picker)
+            .map(|model_preset| {
+                let model_for_action = model_preset.model.clone();
+                SelectionItem {
+                    name: model_preset.display_name,
+                    description: (!model_preset.description.is_empty())
+                        .then_some(model_preset.description.to_string()),
+                    is_current: current_model == Some(model_for_action.as_str()),
+                    is_default: model_preset.is_default,
+                    actions: vec![Box::new(move |tx| {
+                        tx.send(AppEvent::UpdateSubagentPresetModel {
+                            preset,
+                            model: Some(model_for_action.clone()),
+                        });
+                        tx.send(AppEvent::PersistSubagentPresetModel {
+                            preset,
+                            model: Some(model_for_action.clone()),
+                        });
+                    })],
+                    dismiss_on_select: true,
+                    search_value: Some(model_preset.model),
+                    ..Default::default()
+                }
+            })
+            .collect();
+        items.sort_by(|left, right| left.name.cmp(&right.name));
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some(tr(language, "chatwidget.preset_popup.title").to_string()),
+            subtitle: Some(tr_args(
+                language,
+                "chatwidget.preset_popup.model_subtitle",
+                &[("preset", Self::subagent_preset_label(language, preset))],
+            )),
+            footer_hint: Some(standard_popup_hint_line(language)),
+            items,
+            is_searchable: true,
+            header: Box::new(()),
+            ..Default::default()
+        });
+    }
+
+    pub(crate) fn open_subagent_preset_reasoning_picker(&mut self, preset: SubagentPreset) {
+        let language = self.config.language;
+        let current_effort = self.subagent_preset_config(preset).reasoning_effort;
+        let fallback_efforts: Vec<ReasoningEffortConfig> = ReasoningEffortConfig::iter()
+            .filter(|effort| *effort != ReasoningEffortConfig::None)
+            .collect();
+        let supported_efforts: Vec<ReasoningEffortConfig> = self
+            .models_manager
+            .try_list_models(&self.config)
+            .ok()
+            .and_then(|models| {
+                self.subagent_preset_config(preset)
+                    .model
+                    .as_deref()
+                    .or_else(|| self.current_model())
+                    .and_then(|model_slug| {
+                        models
+                            .into_iter()
+                            .find(|model_preset| model_preset.model == model_slug)
+                            .map(|model_preset| {
+                                model_preset
+                                    .supported_reasoning_efforts
+                                    .into_iter()
+                                    .map(|option| option.effort)
+                                    .collect::<Vec<_>>()
+                            })
+                    })
+            })
+            .filter(|efforts| !efforts.is_empty())
+            .unwrap_or(fallback_efforts);
+        let items = supported_efforts
+            .into_iter()
+            .map(|effort| SelectionItem {
+                name: Self::reasoning_effort_label(language, effort).to_string(),
+                is_current: current_effort == Some(effort),
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::UpdateSubagentPresetReasoningEffort {
+                        preset,
+                        effort: Some(effort),
+                    });
+                    tx.send(AppEvent::PersistSubagentPresetReasoningEffort {
+                        preset,
+                        effort: Some(effort),
+                    });
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            })
+            .collect();
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some(tr(language, "chatwidget.preset_popup.title").to_string()),
+            subtitle: Some(tr_args(
+                language,
+                "chatwidget.preset_popup.reasoning_subtitle",
+                &[("preset", Self::subagent_preset_label(language, preset))],
+            )),
+            footer_hint: Some(standard_popup_hint_line(language)),
             items,
             header: Box::new(()),
             ..Default::default()
@@ -3895,9 +4524,14 @@ impl ChatWidget {
                 cwd: None,
                 approval_policy: None,
                 sandbox_policy: None,
+                windows_sandbox_level: None,
                 model: Some(model_for_action.clone()),
                 effort: Some(effort_for_action),
                 summary: None,
+                collaboration_mode: None,
+                personality: None,
+                spec_parallel_priority: None,
+                spec_sdd_planning: None,
             }));
             tx.send(AppEvent::UpdateModel(model_for_action.clone()));
             tx.send(AppEvent::UpdateReasoningEffort(effort_for_action));
@@ -3918,6 +4552,117 @@ impl ChatWidget {
             tx.send(AppEvent::UpdateLanguage(language));
             tx.send(AppEvent::PersistLanguageSelection { language });
         })]
+    }
+
+    fn spec_parallel_priority_selection_actions(enabled: bool) -> Vec<SelectionAction> {
+        vec![Box::new(move |tx| {
+            tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                cwd: None,
+                approval_policy: None,
+                sandbox_policy: None,
+                windows_sandbox_level: None,
+                model: None,
+                effort: None,
+                summary: None,
+                collaboration_mode: None,
+                personality: None,
+                spec_parallel_priority: Some(enabled),
+                spec_sdd_planning: None,
+            }));
+            tx.send(AppEvent::UpdateSpecParallelPriority(enabled));
+            tx.send(AppEvent::PersistSpecParallelPriority { enabled });
+        })]
+    }
+
+    fn collab_feature_selection_actions(
+        mode: Option<ModeKind>,
+        enabled: bool,
+        fallback_model: String,
+        fallback_effort: Option<ReasoningEffortConfig>,
+    ) -> Vec<SelectionAction> {
+        vec![Box::new(move |tx| {
+            tx.send(AppEvent::UpdateCollabFeature(enabled));
+            tx.send(AppEvent::PersistCollabFeature { enabled });
+            if let Some(mode) = mode {
+                let settings = CollaborationSettings {
+                    model: fallback_model.clone(),
+                    reasoning_effort: fallback_effort,
+                    developer_instructions: None,
+                };
+                tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                    cwd: None,
+                    approval_policy: None,
+                    sandbox_policy: None,
+                    windows_sandbox_level: None,
+                    model: None,
+                    effort: None,
+                    summary: None,
+                    collaboration_mode: Some(CollaborationMode { mode, settings }),
+                    personality: None,
+                    spec_parallel_priority: None,
+                    spec_sdd_planning: None,
+                }));
+            }
+        })]
+    }
+
+    fn subagent_preset_label(language: Language, preset: SubagentPreset) -> &'static str {
+        let key = match preset {
+            SubagentPreset::Edit => "chatwidget.preset_popup.preset_edit",
+            SubagentPreset::Read => "chatwidget.preset_popup.preset_read",
+            SubagentPreset::Grep => "chatwidget.preset_popup.preset_grep",
+            SubagentPreset::Run => "chatwidget.preset_popup.preset_run",
+            SubagentPreset::Websearch => "chatwidget.preset_popup.preset_websearch",
+        };
+        tr(language, key)
+    }
+
+    fn subagent_preset_open_actions(preset: SubagentPreset) -> Vec<SelectionAction> {
+        vec![Box::new(move |tx| {
+            tx.send(AppEvent::OpenSubagentPresetActions { preset });
+        })]
+    }
+
+    fn subagent_preset_config(
+        &self,
+        preset: SubagentPreset,
+    ) -> &codex_core::config::types::SubagentPresetConfig {
+        match preset {
+            SubagentPreset::Edit => &self.config.subagent_presets.edit,
+            SubagentPreset::Read => &self.config.subagent_presets.read,
+            SubagentPreset::Grep => &self.config.subagent_presets.grep,
+            SubagentPreset::Run => &self.config.subagent_presets.run,
+            SubagentPreset::Websearch => &self.config.subagent_presets.websearch,
+        }
+    }
+
+    fn set_sdd_collaboration_mode(&self, mode: ModeKind) {
+        if !self.config.features.enabled(Feature::Collab) {
+            return;
+        }
+        let settings = CollaborationSettings {
+            model: self
+                .current_model()
+                .map(ToOwned::to_owned)
+                .or_else(|| self.config.model.clone())
+                .unwrap_or_else(|| self.model_display_name().to_string()),
+            reasoning_effort: self.config.model_reasoning_effort,
+            developer_instructions: None,
+        };
+        self.app_event_tx
+            .send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                cwd: None,
+                approval_policy: None,
+                sandbox_policy: None,
+                windows_sandbox_level: None,
+                model: None,
+                effort: None,
+                summary: None,
+                collaboration_mode: Some(CollaborationMode { mode, settings }),
+                personality: None,
+                spec_parallel_priority: None,
+                spec_sdd_planning: None,
+            }));
     }
 
     /// Open a popup to choose the reasoning effort (stage 2) for the given model.
@@ -4088,9 +4833,14 @@ impl ChatWidget {
                 cwd: None,
                 approval_policy: None,
                 sandbox_policy: None,
+                windows_sandbox_level: None,
                 model: Some(model.clone()),
                 effort: Some(effort),
                 summary: None,
+                collaboration_mode: None,
+                personality: None,
+                spec_parallel_priority: None,
+                spec_sdd_planning: None,
             }));
         self.app_event_tx.send(AppEvent::UpdateModel(model.clone()));
         self.app_event_tx
@@ -4260,9 +5010,14 @@ impl ChatWidget {
                 cwd: None,
                 approval_policy: Some(approval),
                 sandbox_policy: Some(sandbox_clone.clone()),
+                windows_sandbox_level: None,
                 model: None,
                 effort: None,
                 summary: None,
+                collaboration_mode: None,
+                personality: None,
+                spec_parallel_priority: None,
+                spec_sdd_planning: None,
             }));
             tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
             tx.send(AppEvent::UpdateSandboxPolicy(sandbox_clone));
@@ -4885,6 +5640,43 @@ impl ChatWidget {
         self.model = Some(model.to_string());
     }
 
+    /// Set the parallel-priority spec toggle in the widget's config copy.
+    pub(crate) fn set_spec_parallel_priority(&mut self, enabled: bool) {
+        self.config.spec.parallel_priority = enabled;
+    }
+
+    /// Set one sub-agent preset model override in the widget's config copy.
+    pub(crate) fn set_subagent_preset_model(
+        &mut self,
+        preset: SubagentPreset,
+        model: Option<String>,
+    ) {
+        match preset {
+            SubagentPreset::Edit => self.config.subagent_presets.edit.model = model,
+            SubagentPreset::Read => self.config.subagent_presets.read.model = model,
+            SubagentPreset::Grep => self.config.subagent_presets.grep.model = model,
+            SubagentPreset::Run => self.config.subagent_presets.run.model = model,
+            SubagentPreset::Websearch => self.config.subagent_presets.websearch.model = model,
+        }
+    }
+
+    /// Set one sub-agent preset reasoning override in the widget's config copy.
+    pub(crate) fn set_subagent_preset_reasoning_effort(
+        &mut self,
+        preset: SubagentPreset,
+        effort: Option<ReasoningEffortConfig>,
+    ) {
+        match preset {
+            SubagentPreset::Edit => self.config.subagent_presets.edit.reasoning_effort = effort,
+            SubagentPreset::Read => self.config.subagent_presets.read.reasoning_effort = effort,
+            SubagentPreset::Grep => self.config.subagent_presets.grep.reasoning_effort = effort,
+            SubagentPreset::Run => self.config.subagent_presets.run.reasoning_effort = effort,
+            SubagentPreset::Websearch => {
+                self.config.subagent_presets.websearch.reasoning_effort = effort;
+            }
+        }
+    }
+
     fn current_model(&self) -> Option<&str> {
         self.model.as_deref()
     }
@@ -5133,12 +5925,31 @@ impl ChatWidget {
     }
 
     fn on_list_mcp_tools(&mut self, ev: McpListToolsResponseEvent) {
+        let McpListToolsResponseEvent {
+            tools,
+            resources,
+            resource_templates,
+            auth_statuses,
+        } = ev;
+        let tools = serde_json::to_value(tools)
+            .and_then(serde_json::from_value::<HashMap<String, mcp_types::Tool>>);
+        let resources = serde_json::to_value(resources)
+            .and_then(serde_json::from_value::<HashMap<String, Vec<mcp_types::Resource>>>);
+        let resource_templates = serde_json::to_value(resource_templates)
+            .and_then(serde_json::from_value::<HashMap<String, Vec<mcp_types::ResourceTemplate>>>);
+
+        let (Ok(tools), Ok(resources), Ok(resource_templates)) =
+            (tools, resources, resource_templates)
+        else {
+            tracing::warn!("failed to convert MCP tools response payloads");
+            return;
+        };
         self.add_to_history(history_cell::new_mcp_tools_output(
             &self.config,
-            ev.tools,
-            ev.resources,
-            ev.resource_templates,
-            &ev.auth_statuses,
+            tools,
+            resources,
+            resource_templates,
+            &auth_statuses,
         ));
     }
 
@@ -5621,6 +6432,31 @@ fn skills_for_cwd(cwd: &Path, skills_entries: &[SkillsListEntry]) -> Vec<SkillMe
                     name: skill.name.clone(),
                     description: skill.description.clone(),
                     short_description: skill.short_description.clone(),
+                    interface: skill.interface.clone().map(|interface| SkillInterface {
+                        display_name: interface.display_name,
+                        short_description: interface.short_description,
+                        icon_small: interface.icon_small,
+                        icon_large: interface.icon_large,
+                        brand_color: interface.brand_color,
+                        default_prompt: interface.default_prompt,
+                    }),
+                    dependencies: skill.dependencies.clone().map(|dependencies| {
+                        SkillDependencies {
+                            tools: dependencies
+                                .tools
+                                .into_iter()
+                                .map(|tool| SkillToolDependency {
+                                    r#type: tool.r#type,
+                                    value: tool.value,
+                                    description: tool.description,
+                                    transport: tool.transport,
+                                    command: tool.command,
+                                    url: tool.url,
+                                })
+                                .collect(),
+                        }
+                    }),
+                    policy: None,
                     path: skill.path.clone(),
                     scope: skill.scope,
                 })

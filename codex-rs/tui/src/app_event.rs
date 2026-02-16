@@ -21,6 +21,7 @@ use codex_protocol::config_types::SandboxMode;
 use codex_protocol::openai_models::ModelPreset;
 
 use crate::bottom_pane::ApprovalRequest;
+use crate::bottom_pane::StatusLineItem;
 use crate::history_cell::HistoryCell;
 
 use codex_core::features::Feature;
@@ -113,7 +114,10 @@ pub(crate) enum AppEvent {
     RateLimitSnapshotFetched(RateLimitSnapshot),
 
     /// Result of prefetching connectors.
-    ConnectorsLoaded(Result<ConnectorsSnapshot, String>),
+    ConnectorsLoaded {
+        result: Result<ConnectorsSnapshot, String>,
+        is_final: bool,
+    },
 
     /// Result of computing a `/diff` command.
     DiffResult(String),
@@ -127,7 +131,26 @@ pub(crate) enum AppEvent {
         is_installed: bool,
     },
 
+    /// Open the provided URL in the user's browser.
+    OpenUrlInBrowser {
+        url: String,
+    },
+
+    /// Refresh app connector state and mention bindings.
+    RefreshConnectors {
+        force_refetch: bool,
+    },
+
     InsertHistoryCell(Box<dyn HistoryCell>),
+
+    /// Apply rollback semantics to local transcript cells.
+    ///
+    /// This is emitted when rollback was not initiated by the current
+    /// backtrack flow so trimming occurs in AppEvent queue order relative to
+    /// inserted history cells.
+    ApplyThreadRollback {
+        num_turns: u32,
+    },
 
     StartCommitAnimation,
     StopCommitAnimation,
@@ -141,6 +164,9 @@ pub(crate) enum AppEvent {
 
     /// Update the current UI language in the running app and widget.
     UpdateLanguage(Language),
+
+    /// Update the current Parallel Priority spec toggle in the running app and widget.
+    UpdateSpecParallelPriority(bool),
 
     /// Update the active collaboration mask in the running app and widget.
     UpdateCollaborationMode(CollaborationModeMask),
@@ -157,6 +183,11 @@ pub(crate) enum AppEvent {
     /// Persist the selected UI language to the appropriate config.
     PersistLanguageSelection {
         language: Language,
+    },
+
+    /// Persist the selected Parallel Priority spec toggle to the appropriate config.
+    PersistSpecParallelPriority {
+        enabled: bool,
     },
 
     /// Persist the selected approval policy and sandbox mode to the config.
@@ -323,6 +354,18 @@ pub(crate) enum AppEvent {
 
     /// Launch the external editor after a normal draw has completed.
     LaunchExternalEditor,
+
+    /// Async update of the current git branch for status line rendering.
+    StatusLineBranchUpdated {
+        cwd: PathBuf,
+        branch: Option<String>,
+    },
+    /// Apply a user-confirmed status-line item ordering/selection.
+    StatusLineSetup {
+        items: Vec<StatusLineItem>,
+    },
+    /// Dismiss the status-line setup UI without changing config.
+    StatusLineSetupCancelled,
 }
 
 /// The exit strategy requested by the UI layer.
