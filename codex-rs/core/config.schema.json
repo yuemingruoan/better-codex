@@ -1074,8 +1074,8 @@
             }
           ],
           "default": {
-            "model": null,
-            "reasoning_effort": null
+            "model": "gpt-5.3-codex",
+            "reasoning_effort": "low"
           }
         },
         "grep": {
@@ -1085,8 +1085,8 @@
             }
           ],
           "default": {
-            "model": null,
-            "reasoning_effort": null
+            "model": "gpt-5.3-codex",
+            "reasoning_effort": "low"
           }
         },
         "read": {
@@ -1096,8 +1096,8 @@
             }
           ],
           "default": {
-            "model": null,
-            "reasoning_effort": null
+            "model": "gpt-5.3-codex",
+            "reasoning_effort": "low"
           }
         },
         "run": {
@@ -1107,8 +1107,8 @@
             }
           ],
           "default": {
-            "model": null,
-            "reasoning_effort": null
+            "model": "gpt-5.3-codex",
+            "reasoning_effort": "low"
           }
         },
         "websearch": {
@@ -1118,8 +1118,8 @@
             }
           ],
           "default": {
-            "model": null,
-            "reasoning_effort": null
+            "model": "gpt-5.3-codex",
+            "reasoning_effort": "low"
           }
         }
       },

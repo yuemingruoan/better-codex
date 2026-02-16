@@ -165,12 +165,12 @@ init = '''请生成一个名为 AGENTS.md 的文件，为本仓库贡献者提�
 
 spec.parallel_priority = '''本会话已启用 Parallel Priority。
 
-在规划与执行任务时，优先识别并组织可并行推进的独立工作。将任务拆分为最小可验证增量，避免不必要的串行阻塞；涉及共享状态时，明确标注依赖与同步点。'''
+在多 Agent 协作任务中，优先组织可并行推进的独立工作轨道。为每个 sub-agent 明确职责归属，保持文件边界隔离，并在修改共享状态前定义同步点。'''
 
 spec.sdd_planning = '''本会话已启用 SDD Planning。
 
-当任务多步骤或需求仍不明确时，先切换到 planning 模式并确认里程碑后再执行。
-使用 `/spec` 时，请检查并配置 sub-agent presets，为不同职责匹配合适模型与推理强度。
+当任务多步骤或需求仍不明确时，先进入 planning 模式并确认里程碑后再执行。
+该指引用于 `/sdd-develop` 与 `/sdd-develop-parallels` 工作流。
 请按职责为 sub-agent 命名（例如 `api-implementer`、`test-runner`、`docs-i18n`），便于追踪归属与进度。'''
 
 sdd_plan = '''你是资深开发规划师。请根据“需求描述”先判断信息是否充分：  
@@ -225,18 +225,18 @@ parallels 模式额外要求：
 - 分支/工作区操作（创建、切换、合并）必须由提示词引导并按仓库实际流程灵活执行，不依赖固定硬编码 Git 动作。
 - 在计划中明确 experimental 门禁：若 collab 特性未开启，需先报告阻塞并停止执行规划。
 
-task.md 章节结构与 `/sdd-develop` 保持一致（标题与目标、交付物、范围/非范围、任务表、里程碑、风险、验收测试、回滚清理、工具命令、测试计划、汇报清单）。
+task.md 必须包含以下明确章节：1）标题与目标，2）交付物，3）范围/非范围，4）任务表，5）里程碑，6）风险，7）验收测试，8）回滚清理，9）工具命令，10）测试计划，11）汇报清单。
 '''
 
 sdd_execute = '''你是资深代码执行代理。上一轮已用 SDD 计划生成器产出并确认了 `.codex/task.md`；请在此上下文下按计划执行开发，保持可见的进度与验证记录。
 
 核心原则
 - **分支隔离**：全程在独立分支开发，不改主分支，不合并。  
-- **逐项提交**：每完成 task.md 列表中的一项（或拆分子项）并通过验证后，立即提交 commit；提交信息写明已完成的功能。  
+- **里程碑提交**：按执行里程碑提交 commit；每个 commit 都应对应一个连贯且已验证的增量，提交信息写明已完成功能。  
 - **最小可验证增量**：每个变更尽量小且可验证，完成后立即验证。  
 - **TDD 优先**：若缺少测试，先补测试再实现；实现后确保相关测试通过。  
 - **可协作执行**：当 task.md 明确要求且 collab 工具可用时，可组织子 Agent 并保持任务归属与验证链路清晰。
-- **透明汇报**：关键节点向用户汇报进度、测试结果、阻塞。  
+- **汇报后置**：编码期间保留执行记录，面向用户的汇总仅在所有代码改动完成并验证后统一输出。  
 - **安全操作**：优先使用 `apply_patch` 修改文件；命令前说明目的与期望结果。  
 
 执行步骤（顺序）
@@ -249,17 +249,17 @@ sdd_execute = '''你是资深代码执行代理。上一轮已用 SDD 计划生�
    - **测试先行**：若无覆盖，先编写或补充测试；记录计划运行的命令。  
    - **实现改动**：用 `apply_patch` 进行最小变更。  
    - **验证**：运行对应命令（如 `just fmt`，`cargo test -p <crate>`，必要时 `cargo insta test`），收集结果/日志要点。  
-   - **提交变更**：每完成一个任务/子项并验证通过后立刻提交 commit，提交信息以“完成 <功能/子项>”等描述已完成内容。  
-   - **勾选进度**：先在 `.codex/task.md` 中勾选完成状态（`[ ]`→`[x]`），可选同步到 Plan/TODO，并在回复中同步结果与测试状态。  
+   - **提交变更**：完成一组里程碑任务并验证通过后立刻提交 commit，提交信息以“完成 <功能/里程碑>”等描述已完成内容。  
+   - **勾选进度**：先在 `.codex/task.md` 中勾选完成状态（`[ ]`→`[x]`），并维护执行记录用于最终汇总。  
 6. **收尾检查**：按计划的测试/格式化要求执行：  
-   - 代码格式：运行项目约定的格式化命令（如 `just fmt`、`npm run fmt`、`pnpm lint --fix` 等）。  
-   - 测试：根据任务/测试计划运行对应命令（如 `cargo test -p <crate>`、`cargo insta test`、`npm test -- <pattern>`、`pnpm test --filter <name>` 等），并记录结果。  
-7. **阶段总结**：整理分支名、已完成/剩余任务、测试结果、已知问题或阻塞，向用户汇报。  
+    - 代码格式：运行项目约定的格式化命令（如 `just fmt`、`npm run fmt`、`pnpm lint --fix` 等）。  
+    - 测试：根据任务/测试计划运行对应命令（如 `cargo test -p <crate>`、`cargo insta test`、`npm test -- <pattern>`、`pnpm test --filter <name>` 等），并记录结果。  
+7. **代码完成后的最终汇总**：在全部代码完成并验证后，一次性汇报分支名、里程碑 commit、已完成/剩余任务、测试结果、阻塞与下一步优先级。  
 
 汇报节奏（对话中执行）
-- **开始前**：报告分支名、将执行的任务 ID/顺序、预期运行的主要命令，并提醒用户开发在独立分支上完成，完成后请再次运行 `/sdd-develop` 选择合并更新。  
-- **每完成 1–2 个任务**：说明改动与验证结果（通过/失败+日志要点）、Plan/TODO 勾选情况，并明确下一步要做的任务/子项与计划运行的命令。  
-- **阶段结束**：总结分支名、完成/剩余任务、整体测试状态、存在的阻塞或需确认事项，并提出下一阶段的优先级与预定动作。  
+- **编码期间**：在 `.codex/task.md` 与执行日志中持续更新进度；除阻塞外不做中途面向用户的阶段汇报。  
+- **仅阻塞时**：遇到需用户决策的歧义/冲突/权限问题时立即汇报，并给出可解除阻塞选项。  
+- **代码全部完成后**：统一输出一次面向用户的汇总，包含里程碑 commit、验证矩阵、剩余风险与下一步动作。  
 
 额外注意
 - 若发现需求不明或与 `.codex/task.md` 冲突，暂停并向用户提问后再继续。  
@@ -271,23 +271,25 @@ sdd_execute_parallels = '''你是 `/sdd-develop-parallels` 的主 Agent，需统
 
 核心原则
 - **主 Agent 统筹**：负责拆分任务、调度顺序、冲突处理、集成验证、最终汇报。
-- **子 Agent 分工清晰**：每个子 Agent 绑定任务 ID、代码边界、测试命令、通过标准。
+- **按职能拆分**：按实现、测试、文档/i18n 等职能分配子 Agent；每个子 Agent 必须独立完成 implement -> test -> report 全流程后再交付。
 - **TDD 优先**：缺测先补测，再实现。
 - **进度可追踪**：`.codex/task.md` 为单一事实源，完成即勾选。
+- **里程碑提交**：执行与集成阶段均采用里程碑 commit，每个 commit 都应对应连贯且已验证的增量。
+- **汇报后置**：执行期保留 Agent 级进展记录，面向用户的汇报仅在全部代码集成与验证完成后统一输出。
 - **分支/工作区提示词驱动**：创建/切换/合并分支需按仓库实际流程灵活执行，不使用固定硬编码指令路径。
 - **优先唤醒调度**：存在多个活跃子 Agent 时，优先使用 `wait_agents(mode=any)`，让先完成者尽快触发下一轮编排。
 
 执行流程
 1. 先检查前置：仓库根目录、`.codex/task.md`、collab experimental 特性。
 2. 公布主计划：任务顺序、分支/工作区策略、各 Sub Agent 分配。
-3. 派发子任务（spawn/send_input），明确验收标准与验证命令。
-4. 使用批量工具回收结果（`wait_agents`/`close_agents`），优先 `wait_agents(mode=any)` 做并行唤醒，再处理冲突与重叠改动并完成集成。
-5. 统一执行格式化与测试，更新 `.codex/task.md`，输出风险与回滚提示。
+3. 派发子任务（spawn/send_input），明确验收标准与验证命令，并要求每个子 Agent 交付 implement -> test -> report 结果。
+4. 使用批量工具回收结果（`wait_agents`/`close_agents`），优先 `wait_agents(mode=any)` 做并行唤醒；处理冲突与重叠改动后，以里程碑 commit 方式完成集成。
+5. 统一执行格式化与测试，更新 `.codex/task.md`，准备一次性输出最终风险与回滚提示。
 
 汇报节奏
-- 开始前：分支/工作区策略、任务分配、预计命令。
-- 每完成 1-2 项：已完成/剩余任务、测试结果、阻塞与下一步派发。
-- 阶段结束：集成结果、最终测试矩阵、未决风险、checkpoint 摘要。
+- 编排期间：维护内部调度/进展日志与子 Agent 报告；除阻塞外不做中途面向用户汇报。
+- 仅阻塞时：遇到需要用户决策的阻塞立即同步。
+- 代码全部完成后：统一输出合并结果、里程碑 commit、最终测试矩阵、未决风险、回滚说明与 checkpoint 状态。
 '''
 
 sdd_merge = '''你是资深合并更新协助代理。用户选择通过 Pull Request 合并本次 SDD 分支更新。不要使用程序内置的 SDD Git 自动合并流程，请按仓库实际流程指导并执行合并与收尾。
@@ -588,12 +590,12 @@ profile_suffix = "（配置档：${profile}）"
 save_default_failed = "保存 Parallel Priority 偏好失败：${error}"
 save_profile_failed = "为配置档 `${profile}` 保存 Parallel Priority 失败：${error}"
 
-[app.spec.sdd_planning]
-disabled = "已关闭 SDD Planning。"
-enabled = "已开启 SDD Planning。"
+[app.collab]
+disabled = "已关闭 collab。"
+enabled = "已开启 collab。"
 profile_suffix = "（配置档：${profile}）"
-save_default_failed = "保存 SDD Planning 偏好失败：${error}"
-save_profile_failed = "为配置档 `${profile}` 保存 SDD Planning 失败：${error}"
+save_default_failed = "保存 collab 偏好失败：${error}"
+save_profile_failed = "为配置档 `${profile}` 保存 collab 偏好失败：${error}"
 
 [app.preset]
 saved = "已保存 sub-agent 预设 `${preset}`。"
@@ -685,6 +687,15 @@ close_end = "`${receiver_id}` 关闭结束，状态为 `${status}`。"
 title = "选择协作模式"
 subtitle = "为当前会话选择协作预设。"
 action_apply = "应用模式"
+plan = "规划（Plan）"
+plan_desc = "启动以规划为中心的协作流程。"
+plan_status = "collab 开启时可用。"
+proxy = "转发（Proxy）"
+proxy_desc = "将后续指令转发给当前活跃的子 Agent。"
+proxy_status = "需要存在活跃子 Agent。"
+close = "关闭（Close）"
+close_desc = "关闭当前活跃的子 Agent 会话。"
+close_status = "需要存在活跃子 Agent。"
 hint = "按 Enter 应用，按 Esc 取消。"
 
 [chatwidget.clean]
@@ -725,25 +736,25 @@ subtitle = "这些设置会直接随请求携带，不会创建 .codex/spec 文�
 checkbox_hint = "按 Tab 切换选项，按 Enter 保存。"
 parallel_priority_label = "Parallel Priority"
 parallel_priority_label_desc = "优先组织可并行推进的独立工作。"
+parallel_priority_requires_collab_desc = "请先通过 /collab 开启 collab，才能启用 Parallel Priority。"
 parallel_priority_off = "关闭 Parallel Priority"
 parallel_priority_off_desc = "不在模型请求中注入 Parallel Priority 规范提示词。"
 parallel_priority_on = "开启 Parallel Priority"
 parallel_priority_on_desc = "注入内置规范提示词，让代理在可行时优先组织可并行执行的工作。"
-sdd_planning_label = "SDD Planning"
-sdd_planning_label_desc = "注入用于 /spec 与 sub-agent 协作的规划指引。"
-sdd_planning_off = "关闭 SDD Planning"
-sdd_planning_off_desc = "不在模型请求中注入 SDD Planning 规范提示词。"
-sdd_planning_on = "开启 SDD Planning"
-sdd_planning_on_desc = "在模型请求中注入内置 SDD 规划提示词。"
 
 [chatwidget.preset_popup]
 title = "Sub-agent 预设"
 subtitle = "为内置 sub-agent 预设配置模型与推理覆盖。"
-preset_edit = "edit"
-preset_read = "read"
-preset_grep = "grep"
-preset_run = "run"
-preset_websearch = "websearch"
+preset_edit = "编辑与补丁"
+preset_edit_desc = "适合代码修改与补丁编写。"
+preset_read = "阅读与分析"
+preset_read_desc = "适合理解代码路径并输出结论摘要。"
+preset_grep = "代码检索"
+preset_grep_desc = "适合快速仓库搜索与影响面追踪。"
+preset_run = "命令与测试"
+preset_run_desc = "适合命令执行、验证与测试运行。"
+preset_websearch = "网络检索"
+preset_websearch_desc = "适合在线查证与来源核验。"
 actions_subtitle = "预设：${preset}"
 model_subtitle = "为 ${preset} 选择模型"
 reasoning_subtitle = "为 ${preset} 选择推理强度"
@@ -966,6 +977,12 @@ errored = "出错"
 timed_out = "超时"
 shutdown = "已关闭"
 not_found = "未找到"
+available = "可用"
+unavailable = "不可用"
+requires_active_agent = "需要活跃子 Agent"
+plan = "规划"
+proxy = "转发"
+close = "关闭"
 
 [command_popup]
 send_saved_prompt = "发送已保存的提示词"

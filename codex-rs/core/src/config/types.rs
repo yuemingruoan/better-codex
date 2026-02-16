@@ -602,11 +602,20 @@ impl SubagentPreset {
 }
 
 /// Model overrides for one built-in sub-agent preset.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct SubagentPresetConfig {
     pub model: Option<String>,
     pub reasoning_effort: Option<ReasoningEffort>,
+}
+
+impl Default for SubagentPresetConfig {
+    fn default() -> Self {
+        Self {
+            model: Some("gpt-5.3-codex".to_string()),
+            reasoning_effort: Some(ReasoningEffort::Low),
+        }
+    }
 }
 
 /// Per-preset model overrides for built-in sub-agent presets.
@@ -1085,5 +1094,20 @@ mod tests {
             err.to_string().contains("bearer_token is not supported"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn subagent_presets_default_to_gpt_5_3_codex_with_low_reasoning() {
+        let expected = SubagentPresetConfig {
+            model: Some("gpt-5.3-codex".to_string()),
+            reasoning_effort: Some(ReasoningEffort::Low),
+        };
+        let defaults = SubagentPresetsConfig::default();
+
+        assert_eq!(defaults.edit, expected);
+        assert_eq!(defaults.read, expected);
+        assert_eq!(defaults.grep, expected);
+        assert_eq!(defaults.run, expected);
+        assert_eq!(defaults.websearch, expected);
     }
 }

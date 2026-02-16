@@ -104,7 +104,6 @@ use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::config_types::CollaborationMode;
-use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::Settings as CollaborationSettings;
@@ -439,7 +438,7 @@ struct SddDevelopState {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum SddGitPendingAction {
-    CreateBranch { description: String },
+    CreateBranchForPlan { description: String },
     FinalizeMerge,
     AbandonBranch,
 }
@@ -556,6 +555,8 @@ pub(crate) struct ChatWidget {
     sdd_git_action_failed: bool,
     // When true, start a fresh session after current turn completes (used for SDD abandon).
     sdd_new_session_after_cleanup: bool,
+    // Previous spec.sdd_planning value before SDD workflow auto-enables it.
+    sdd_spec_sdd_planning_restore: Option<bool>,
 }
 
 /// Snapshot of active-cell state that affects transcript overlay rendering.
@@ -834,24 +835,31 @@ impl ChatWidget {
                 return;
             }
             match action {
-                SddGitPendingAction::CreateBranch { description } => {
+                SddGitPendingAction::CreateBranchForPlan { description } => {
                     let workflow = self
                         .sdd_state
                         .as_ref()
                         .map_or(SddWorkflow::Standard, |state| state.workflow);
-                    let prompt = self.build_sdd_exec_prompt(&description, workflow);
+                    let prompt = self.build_sdd_plan_prompt(&description, workflow);
                     self.submit_user_message(prompt.into());
-                    if let Some(state) = self.sdd_state.as_mut() {
-                        state.stage = SddDevelopStage::AwaitDevDecision;
-                    }
+                    let plan_request_hint = if workflow == SddWorkflow::Parallels {
+                        tr(
+                            self.config.language,
+                            "chatwidget.sdd.plan_request_hint_parallels",
+                        )
+                        .to_string()
+                    } else {
+                        tr(self.config.language, "chatwidget.sdd.plan_request_hint").to_string()
+                    };
                     self.add_info_message(
-                        tr(self.config.language, "chatwidget.sdd.exec_sent").to_string(),
-                        Some(tr(self.config.language, "chatwidget.sdd.exec_sent_hint").to_string()),
+                        tr(self.config.language, "chatwidget.sdd.plan_request_sent").to_string(),
+                        Some(plan_request_hint),
                     );
-                    self.open_sdd_dev_options();
+                    self.open_sdd_plan_options();
                 }
                 SddGitPendingAction::FinalizeMerge => {
                     self.sdd_state = None;
+                    self.restore_sdd_planning_after_workflow();
                     self.add_info_message(
                         tr(self.config.language, "chatwidget.sdd.merge_completed").to_string(),
                         None,
@@ -859,6 +867,7 @@ impl ChatWidget {
                 }
                 SddGitPendingAction::AbandonBranch => {
                     self.sdd_state = None;
+                    self.restore_sdd_planning_after_workflow();
                     self.sdd_new_session_after_cleanup = true;
                     self.add_info_message(
                         tr(self.config.language, "chatwidget.sdd.branch_deleted").to_string(),
@@ -2087,6 +2096,7 @@ impl ChatWidget {
             sdd_pending_git_action: None,
             sdd_git_action_failed: false,
             sdd_new_session_after_cleanup: false,
+            sdd_spec_sdd_planning_restore: None,
         };
 
         widget.prefetch_rate_limits();
@@ -2197,6 +2207,7 @@ impl ChatWidget {
             sdd_pending_git_action: None,
             sdd_git_action_failed: false,
             sdd_new_session_after_cleanup: false,
+            sdd_spec_sdd_planning_restore: None,
         };
 
         widget.prefetch_rate_limits();
@@ -2647,23 +2658,64 @@ impl ChatWidget {
             self.sdd_state = Some(SddDevelopState {
                 workflow,
                 description: desc.clone(),
-                branch_name,
+                branch_name: branch_name.clone(),
                 base_branch: None,
                 stage: SddDevelopStage::AwaitPlanDecision,
             });
+            self.enable_sdd_planning_for_workflow();
             self.set_sdd_collaboration_mode(ModeKind::Plan);
-            let prompt = self.build_sdd_plan_prompt(&desc, workflow);
-            self.submit_user_message(prompt.into());
-            let plan_request_hint = if workflow == SddWorkflow::Parallels {
-                tr(language, "chatwidget.sdd.plan_request_hint_parallels").to_string()
-            } else {
-                tr(language, "chatwidget.sdd.plan_request_hint").to_string()
+            if workflow == SddWorkflow::Parallels {
+                let prompt = self.build_sdd_plan_prompt(&desc, workflow);
+                self.submit_user_message(prompt.into());
+                self.add_info_message(
+                    tr(language, "chatwidget.sdd.plan_request_sent").to_string(),
+                    Some(tr(language, "chatwidget.sdd.plan_request_hint_parallels").to_string()),
+                );
+                self.open_sdd_plan_options();
+                return;
+            }
+
+            let base_branch = match std::process::Command::new("git")
+                .arg("rev-parse")
+                .arg("--abbrev-ref")
+                .arg("HEAD")
+                .current_dir(&self.config.cwd)
+                .output()
+            {
+                Ok(output) if output.status.success() => {
+                    let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    if branch.is_empty() || branch == "HEAD" {
+                        self.add_error_message(
+                            tr(language, "chatwidget.sdd.base_branch_unknown").to_string(),
+                        );
+                        return;
+                    }
+                    branch
+                }
+                _ => {
+                    self.add_error_message(
+                        tr(language, "chatwidget.sdd.base_branch_unknown").to_string(),
+                    );
+                    return;
+                }
             };
+
+            if let Some(state) = self.sdd_state.as_mut() {
+                state.base_branch = Some(base_branch.clone());
+            }
+            self.sdd_pending_git_action =
+                Some(SddGitPendingAction::CreateBranchForPlan { description: desc });
+            self.sdd_git_action_failed = false;
+            self.submit_op(Op::SddGitAction {
+                action: SddGitAction::CreateBranch {
+                    name: branch_name,
+                    base: base_branch,
+                },
+            });
             self.add_info_message(
-                tr(language, "chatwidget.sdd.plan_request_sent").to_string(),
-                Some(plan_request_hint),
+                tr(language, "chatwidget.sdd.branch_create_started").to_string(),
+                None,
             );
-            self.open_sdd_plan_options();
             return;
         }
 
@@ -2839,38 +2891,35 @@ impl ChatWidget {
             return;
         }
 
-        let branch_name = match self.sdd_state.as_ref() {
-            Some(state) => state.branch_name.clone(),
-            None => {
-                self.add_error_message(tr(language, "chatwidget.sdd.branch_unknown").to_string());
-                return;
+        if self
+            .sdd_state
+            .as_ref()
+            .is_some_and(|state| state.base_branch.is_none())
+        {
+            let base_branch = match current_branch_name(&self.config.cwd).await {
+                Some(branch) => branch,
+                None => {
+                    self.add_error_message(
+                        tr(language, "chatwidget.sdd.base_branch_unknown").to_string(),
+                    );
+                    return;
+                }
+            };
+            if let Some(state) = self.sdd_state.as_mut() {
+                state.base_branch = Some(base_branch);
             }
-        };
-        let base_branch = match current_branch_name(&self.config.cwd).await {
-            Some(branch) => branch,
-            None => {
-                self.add_error_message(
-                    tr(language, "chatwidget.sdd.base_branch_unknown").to_string(),
-                );
-                return;
-            }
-        };
-        if let Some(state) = self.sdd_state.as_mut() {
-            state.base_branch = Some(base_branch.clone());
         }
 
-        self.sdd_pending_git_action = Some(SddGitPendingAction::CreateBranch { description });
-        self.sdd_git_action_failed = false;
-        self.submit_op(Op::SddGitAction {
-            action: SddGitAction::CreateBranch {
-                name: branch_name,
-                base: base_branch,
-            },
-        });
+        if let Some(state) = self.sdd_state.as_mut() {
+            state.stage = SddDevelopStage::AwaitDevDecision;
+        }
+        let prompt = self.build_sdd_exec_prompt(&description, workflow);
+        self.submit_user_message(prompt.into());
         self.add_info_message(
-            tr(language, "chatwidget.sdd.branch_create_started").to_string(),
-            None,
+            tr(language, "chatwidget.sdd.exec_sent").to_string(),
+            Some(tr(language, "chatwidget.sdd.exec_sent_hint").to_string()),
         );
+        self.open_sdd_dev_options();
     }
 
     pub(crate) fn on_sdd_plan_rework(&mut self) {
@@ -2954,6 +3003,7 @@ impl ChatWidget {
             self.sdd_pending_git_action = None;
             self.sdd_git_action_failed = false;
             self.submit_user_message(prompt.into());
+            self.restore_sdd_planning_after_workflow();
             self.add_info_message(
                 tr(language, "chatwidget.sdd.merge_guidance_sent").to_string(),
                 Some(tr(language, "chatwidget.sdd.merge_guidance_hint_parallels").to_string()),
@@ -3057,9 +3107,9 @@ impl ChatWidget {
             )
         };
         if template.is_empty() {
-            description_block
+            self.inject_sdd_planning_prompt(description_block)
         } else {
-            format!("{template}\n\n{description_block}")
+            self.inject_sdd_planning_prompt(format!("{template}\n\n{description_block}"))
         }
     }
 
@@ -3097,7 +3147,9 @@ impl ChatWidget {
     }
 
     fn build_sdd_plan_rework_prompt(&self, _description: &str) -> String {
-        tr(self.config.language, "chatwidget.sdd.plan_rework_prompt").to_string()
+        self.inject_sdd_planning_prompt(
+            tr(self.config.language, "chatwidget.sdd.plan_rework_prompt").to_string(),
+        )
     }
 
     fn build_sdd_exec_prompt(&self, description: &str, workflow: SddWorkflow) -> String {
@@ -3111,9 +3163,9 @@ impl ChatWidget {
             tr(self.config.language, "chatwidget.sdd.requirement_label")
         );
         if template.is_empty() {
-            description_block
+            self.inject_sdd_planning_prompt(description_block)
         } else {
-            format!("{template}\n\n{description_block}")
+            self.inject_sdd_planning_prompt(format!("{template}\n\n{description_block}"))
         }
     }
 
@@ -3134,10 +3186,67 @@ impl ChatWidget {
             tr(self.config.language, "chatwidget.sdd.branch_label")
         );
         if template.is_empty() {
-            context_block
+            self.inject_sdd_planning_prompt(context_block)
         } else {
-            format!("{template}\n\n{context_block}")
+            self.inject_sdd_planning_prompt(format!("{template}\n\n{context_block}"))
         }
+    }
+
+    fn enable_sdd_planning_for_workflow(&mut self) {
+        if self.sdd_spec_sdd_planning_restore.is_none() {
+            self.sdd_spec_sdd_planning_restore = Some(self.config.spec.sdd_planning);
+        }
+        if self.config.spec.sdd_planning {
+            return;
+        }
+        self.config.spec.sdd_planning = true;
+        self.submit_op(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            collaboration_mode: None,
+            personality: None,
+            spec_parallel_priority: None,
+            spec_sdd_planning: Some(true),
+        });
+    }
+
+    fn restore_sdd_planning_after_workflow(&mut self) {
+        let Some(previous) = self.sdd_spec_sdd_planning_restore.take() else {
+            return;
+        };
+        if previous == self.config.spec.sdd_planning {
+            return;
+        }
+        self.config.spec.sdd_planning = previous;
+        self.submit_op(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            collaboration_mode: None,
+            personality: None,
+            spec_parallel_priority: None,
+            spec_sdd_planning: Some(previous),
+        });
+    }
+
+    fn inject_sdd_planning_prompt(&self, message: String) -> String {
+        if self.config.spec.sdd_planning {
+            return message;
+        }
+        let planning_prompt = tr(self.config.language, "prompt.spec.sdd_planning").trim();
+        if planning_prompt.is_empty() {
+            return message;
+        }
+        format!("{planning_prompt}\n\n{message}")
     }
     fn dispatch_command_with_args(&mut self, cmd: SlashCommand, args: String) {
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
@@ -3917,34 +4026,26 @@ impl ChatWidget {
 
     pub(crate) fn open_spec_popup(&mut self) {
         let language = self.config.language;
+        let collab_enabled = self.config.features.enabled(Feature::Collab);
         let parallel_priority_enabled = self.config.spec.parallel_priority;
-        let sdd_planning_enabled = self.config.spec.sdd_planning;
-        let items = vec![
-            SelectionItem {
-                name: tr(language, "chatwidget.spec_popup.parallel_priority_label").to_string(),
-                description: Some(
-                    tr(
-                        language,
-                        "chatwidget.spec_popup.parallel_priority_label_desc",
-                    )
-                    .to_string(),
-                ),
-                is_current: parallel_priority_enabled,
-                actions: Self::spec_parallel_priority_selection_actions(!parallel_priority_enabled),
-                dismiss_on_select: false,
-                ..Default::default()
+        let can_toggle_parallel_priority = collab_enabled || parallel_priority_enabled;
+        let parallel_priority_description_key = if can_toggle_parallel_priority {
+            "chatwidget.spec_popup.parallel_priority_label_desc"
+        } else {
+            "chatwidget.spec_popup.parallel_priority_requires_collab_desc"
+        };
+        let items = vec![SelectionItem {
+            name: tr(language, "chatwidget.spec_popup.parallel_priority_label").to_string(),
+            description: Some(tr(language, parallel_priority_description_key).to_string()),
+            is_current: parallel_priority_enabled,
+            actions: if can_toggle_parallel_priority {
+                Self::spec_parallel_priority_selection_actions(!parallel_priority_enabled)
+            } else {
+                Vec::new()
             },
-            SelectionItem {
-                name: tr(language, "chatwidget.spec_popup.sdd_planning_label").to_string(),
-                description: Some(
-                    tr(language, "chatwidget.spec_popup.sdd_planning_label_desc").to_string(),
-                ),
-                is_current: sdd_planning_enabled,
-                actions: Self::spec_sdd_planning_selection_actions(!sdd_planning_enabled),
-                dismiss_on_select: false,
-                ..Default::default()
-            },
-        ];
+            dismiss_on_select: false,
+            ..Default::default()
+        }];
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some(tr(language, "chatwidget.spec_popup.title").to_string()),
@@ -3959,52 +4060,49 @@ impl ChatWidget {
 
     pub(crate) fn open_collab_popup(&mut self) {
         let language = self.config.language;
-        if !self.config.features.enabled(Feature::Collab) {
-            self.add_info_message(
-                tr(language, "chatwidget.collab.disabled").to_string(),
-                Some(tr(language, "chatwidget.collab.enable_collab").to_string()),
-            );
-            return;
-        }
-
-        let collaboration_modes: Vec<CollaborationModeMask> = self
-            .models_manager
-            .list_collaboration_modes()
-            .into_iter()
-            .filter(|mask| mask.mode.unwrap_or_default().is_tui_visible())
-            .collect();
-        if collaboration_modes.is_empty() {
-            self.add_info_message(
-                tr(language, "chatwidget.collab.plan_unavailable").to_string(),
-                None,
-            );
-            return;
-        }
-
         let fallback_model = self
             .current_model()
             .unwrap_or_else(|| self.model_display_name())
             .to_string();
         let fallback_effort = self.config.model_reasoning_effort;
-
-        let items = collaboration_modes
-            .into_iter()
-            .map(|mask| {
-                let mode_kind = mask.mode.unwrap_or_default();
-                SelectionItem {
-                    name: mask.name.clone(),
-                    description: Some(mode_kind.display_name().to_string()),
-                    is_current: mode_kind == ModeKind::Default,
-                    actions: Self::collaboration_mode_selection_actions(
-                        mask,
-                        fallback_model.clone(),
-                        fallback_effort,
-                    ),
-                    dismiss_on_select: true,
-                    ..Default::default()
-                }
-            })
-            .collect();
+        let items = vec![
+            SelectionItem {
+                name: tr(language, "chatwidget.collab_popup.plan").to_string(),
+                description: Some(tr(language, "chatwidget.collab_popup.plan_desc").to_string()),
+                actions: Self::collab_feature_selection_actions(
+                    Some(ModeKind::Plan),
+                    true,
+                    fallback_model.clone(),
+                    fallback_effort,
+                ),
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: tr(language, "chatwidget.collab_popup.proxy").to_string(),
+                description: Some(tr(language, "chatwidget.collab_popup.proxy_desc").to_string()),
+                actions: Self::collab_feature_selection_actions(
+                    Some(ModeKind::Default),
+                    true,
+                    fallback_model.clone(),
+                    fallback_effort,
+                ),
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: tr(language, "chatwidget.collab_popup.close").to_string(),
+                description: Some(tr(language, "chatwidget.collab_popup.close_desc").to_string()),
+                actions: Self::collab_feature_selection_actions(
+                    None,
+                    false,
+                    fallback_model,
+                    fallback_effort,
+                ),
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some(tr(language, "chatwidget.collab_popup.title").to_string()),
@@ -4028,7 +4126,24 @@ impl ChatWidget {
         .into_iter()
         .map(|preset| SelectionItem {
             name: Self::subagent_preset_label(language, preset).to_string(),
-            description: Some(preset.as_config_key().to_string()),
+            description: Some(
+                match preset {
+                    SubagentPreset::Edit => {
+                        tr(language, "chatwidget.preset_popup.preset_edit_desc")
+                    }
+                    SubagentPreset::Read => {
+                        tr(language, "chatwidget.preset_popup.preset_read_desc")
+                    }
+                    SubagentPreset::Grep => {
+                        tr(language, "chatwidget.preset_popup.preset_grep_desc")
+                    }
+                    SubagentPreset::Run => tr(language, "chatwidget.preset_popup.preset_run_desc"),
+                    SubagentPreset::Websearch => {
+                        tr(language, "chatwidget.preset_popup.preset_websearch_desc")
+                    }
+                }
+                .to_string(),
+            ),
             is_current: false,
             actions: Self::subagent_preset_open_actions(preset),
             dismiss_on_select: true,
@@ -4082,38 +4197,6 @@ impl ChatWidget {
                 description: Some(reasoning_description),
                 actions: vec![Box::new(move |tx| {
                     tx.send(AppEvent::OpenSubagentPresetReasoningPicker { preset });
-                })],
-                dismiss_on_select: true,
-                ..Default::default()
-            },
-            SelectionItem {
-                name: tr(language, "chatwidget.preset_popup.action_clear_model").to_string(),
-                description: None,
-                actions: vec![Box::new(move |tx| {
-                    tx.send(AppEvent::UpdateSubagentPresetModel {
-                        preset,
-                        model: None,
-                    });
-                    tx.send(AppEvent::PersistSubagentPresetModel {
-                        preset,
-                        model: None,
-                    });
-                })],
-                dismiss_on_select: true,
-                ..Default::default()
-            },
-            SelectionItem {
-                name: tr(language, "chatwidget.preset_popup.action_clear_reasoning").to_string(),
-                description: None,
-                actions: vec![Box::new(move |tx| {
-                    tx.send(AppEvent::UpdateSubagentPresetReasoningEffort {
-                        preset,
-                        effort: None,
-                    });
-                    tx.send(AppEvent::PersistSubagentPresetReasoningEffort {
-                        preset,
-                        effort: None,
-                    });
                 })],
                 dismiss_on_select: true,
                 ..Default::default()
@@ -4491,54 +4574,35 @@ impl ChatWidget {
         })]
     }
 
-    fn spec_sdd_planning_selection_actions(enabled: bool) -> Vec<SelectionAction> {
-        vec![Box::new(move |tx| {
-            tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
-                cwd: None,
-                approval_policy: None,
-                sandbox_policy: None,
-                windows_sandbox_level: None,
-                model: None,
-                effort: None,
-                summary: None,
-                collaboration_mode: None,
-                personality: None,
-                spec_parallel_priority: None,
-                spec_sdd_planning: Some(enabled),
-            }));
-            tx.send(AppEvent::UpdateSpecSddPlanning(enabled));
-            tx.send(AppEvent::PersistSpecSddPlanning { enabled });
-        })]
-    }
-
-    fn collaboration_mode_selection_actions(
-        mode_mask: CollaborationModeMask,
+    fn collab_feature_selection_actions(
+        mode: Option<ModeKind>,
+        enabled: bool,
         fallback_model: String,
         fallback_effort: Option<ReasoningEffortConfig>,
     ) -> Vec<SelectionAction> {
         vec![Box::new(move |tx| {
-            let mode = mode_mask.mode.unwrap_or_default();
-            let settings = CollaborationSettings {
-                model: mode_mask
-                    .model
-                    .clone()
-                    .unwrap_or_else(|| fallback_model.clone()),
-                reasoning_effort: mode_mask.reasoning_effort.unwrap_or(fallback_effort),
-                developer_instructions: mode_mask.developer_instructions.clone().unwrap_or(None),
-            };
-            tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
-                cwd: None,
-                approval_policy: None,
-                sandbox_policy: None,
-                windows_sandbox_level: None,
-                model: None,
-                effort: None,
-                summary: None,
-                collaboration_mode: Some(CollaborationMode { mode, settings }),
-                personality: None,
-                spec_parallel_priority: None,
-                spec_sdd_planning: None,
-            }));
+            tx.send(AppEvent::UpdateCollabFeature(enabled));
+            tx.send(AppEvent::PersistCollabFeature { enabled });
+            if let Some(mode) = mode {
+                let settings = CollaborationSettings {
+                    model: fallback_model.clone(),
+                    reasoning_effort: fallback_effort,
+                    developer_instructions: None,
+                };
+                tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                    cwd: None,
+                    approval_policy: None,
+                    sandbox_policy: None,
+                    windows_sandbox_level: None,
+                    model: None,
+                    effort: None,
+                    summary: None,
+                    collaboration_mode: Some(CollaborationMode { mode, settings }),
+                    personality: None,
+                    spec_parallel_priority: None,
+                    spec_sdd_planning: None,
+                }));
+            }
         })]
     }
 
@@ -5579,11 +5643,6 @@ impl ChatWidget {
     /// Set the parallel-priority spec toggle in the widget's config copy.
     pub(crate) fn set_spec_parallel_priority(&mut self, enabled: bool) {
         self.config.spec.parallel_priority = enabled;
-    }
-
-    /// Set the sdd-planning spec toggle in the widget's config copy.
-    pub(crate) fn set_spec_sdd_planning(&mut self, enabled: bool) {
-        self.config.spec.sdd_planning = enabled;
     }
 
     /// Set one sub-agent preset model override in the widget's config copy.

@@ -52,7 +52,6 @@ use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::types::SubagentPreset;
-#[cfg(target_os = "windows")]
 use codex_core::features::Feature;
 use codex_core::models_manager::manager::RefreshStrategy;
 use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
@@ -1766,9 +1765,14 @@ impl App {
                 self.config.spec.parallel_priority = enabled;
                 self.chat_widget.set_spec_parallel_priority(enabled);
             }
-            AppEvent::UpdateSpecSddPlanning(enabled) => {
-                self.config.spec.sdd_planning = enabled;
-                self.chat_widget.set_spec_sdd_planning(enabled);
+            AppEvent::UpdateCollabFeature(enabled) => {
+                if enabled {
+                    self.config.features.enable(Feature::Collab);
+                } else {
+                    self.config.features.disable(Feature::Collab);
+                }
+                self.chat_widget
+                    .set_feature_enabled(Feature::Collab, enabled);
             }
             AppEvent::UpdateSubagentPresetModel { preset, model } => {
                 self.chat_widget
@@ -2132,39 +2136,36 @@ impl App {
                     }
                 }
             }
-            AppEvent::PersistSpecSddPlanning { enabled } => {
+            AppEvent::PersistCollabFeature { enabled } => {
                 let profile = self.active_profile.as_deref();
                 match ConfigEditsBuilder::new(&self.config.codex_home)
                     .with_profile(profile)
-                    .set_spec_sdd_planning(enabled)
+                    .set_feature_enabled(Feature::Collab.key(), enabled)
                     .apply()
                     .await
                 {
                     Ok(()) => {
                         let key = if enabled {
-                            "app.spec.sdd_planning.enabled"
+                            "app.collab.enabled"
                         } else {
-                            "app.spec.sdd_planning.disabled"
+                            "app.collab.disabled"
                         };
                         let mut message = tr(self.config.language, key).to_string();
                         if let Some(profile) = profile {
                             message.push_str(&tr_args(
                                 self.config.language,
-                                "app.spec.sdd_planning.profile_suffix",
+                                "app.collab.profile_suffix",
                                 &[("profile", profile)],
                             ));
                         }
                         self.chat_widget.add_info_message(message, None);
                     }
                     Err(err) => {
-                        tracing::error!(
-                            error = %err,
-                            "failed to persist sdd planning spec selection"
-                        );
+                        tracing::error!(error = %err, "failed to persist collab feature setting");
                         let key = if profile.is_some() {
-                            "app.spec.sdd_planning.save_profile_failed"
+                            "app.collab.save_profile_failed"
                         } else {
-                            "app.spec.sdd_planning.save_default_failed"
+                            "app.collab.save_default_failed"
                         };
                         let message = if let Some(profile) = profile {
                             tr_args(
@@ -2180,7 +2181,7 @@ impl App {
                 }
             }
             AppEvent::PersistSubagentPresetModel { preset, model } => {
-                let preset_key = preset.as_config_key();
+                let preset_label = Self::subagent_preset_label(preset, self.config.language);
                 match ConfigEditsBuilder::new(&self.config.codex_home)
                     .set_subagent_preset_model(preset, model.as_deref())
                     .apply()
@@ -2191,13 +2192,13 @@ impl App {
                             tr_args(
                                 self.config.language,
                                 "app.preset.saved_with_model",
-                                &[("preset", preset_key), ("model", &model)],
+                                &[("preset", preset_label), ("model", &model)],
                             )
                         } else {
                             tr_args(
                                 self.config.language,
                                 "app.preset.cleared_model",
-                                &[("preset", preset_key)],
+                                &[("preset", preset_label)],
                             )
                         };
                         self.chat_widget.add_info_message(message, None);
@@ -2210,14 +2211,14 @@ impl App {
                         let message = tr_args(
                             self.config.language,
                             "app.preset.save_failed",
-                            &[("preset", preset_key), ("error", &err.to_string())],
+                            &[("preset", preset_label), ("error", &err.to_string())],
                         );
                         self.chat_widget.add_error_message(message);
                     }
                 }
             }
             AppEvent::PersistSubagentPresetReasoningEffort { preset, effort } => {
-                let preset_key = preset.as_config_key();
+                let preset_label = Self::subagent_preset_label(preset, self.config.language);
                 match ConfigEditsBuilder::new(&self.config.codex_home)
                     .set_subagent_preset_reasoning_effort(preset, effort)
                     .apply()
@@ -2227,7 +2228,7 @@ impl App {
                         let message = tr_args(
                             self.config.language,
                             "app.preset.saved",
-                            &[("preset", preset_key)],
+                            &[("preset", preset_label)],
                         );
                         self.chat_widget.add_info_message(message, None);
                     }
@@ -2239,7 +2240,7 @@ impl App {
                         let message = tr_args(
                             self.config.language,
                             "app.preset.save_failed",
-                            &[("preset", preset_key), ("error", &err.to_string())],
+                            &[("preset", preset_label), ("error", &err.to_string())],
                         );
                         self.chat_widget.add_error_message(message);
                     }
@@ -2518,6 +2519,17 @@ impl App {
     ) -> Option<&'static str> {
         (!model.starts_with("codex-auto-"))
             .then(|| Self::reasoning_label(reasoning_effort, language))
+    }
+
+    fn subagent_preset_label(preset: SubagentPreset, language: Language) -> &'static str {
+        let key = match preset {
+            SubagentPreset::Edit => "chatwidget.preset_popup.preset_edit",
+            SubagentPreset::Read => "chatwidget.preset_popup.preset_read",
+            SubagentPreset::Grep => "chatwidget.preset_popup.preset_grep",
+            SubagentPreset::Run => "chatwidget.preset_popup.preset_run",
+            SubagentPreset::Websearch => "chatwidget.preset_popup.preset_websearch",
+        };
+        tr(language, key)
     }
 
     pub(crate) fn token_usage(&self) -> codex_core::protocol::TokenUsage {

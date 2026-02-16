@@ -120,8 +120,8 @@ pub(crate) enum AppEvent {
     /// Update the current Parallel Priority spec toggle in the running app and widget.
     UpdateSpecParallelPriority(bool),
 
-    /// Update the current SDD Planning spec toggle in the running app and widget.
-    UpdateSpecSddPlanning(bool),
+    /// Update whether the collab feature is enabled in the running app and widget.
+    UpdateCollabFeature(bool),
 
     /// Update one sub-agent preset model override in the running app and widget.
     UpdateSubagentPresetModel {
@@ -151,8 +151,8 @@ pub(crate) enum AppEvent {
         enabled: bool,
     },
 
-    /// Persist the selected SDD Planning spec toggle to the appropriate config.
-    PersistSpecSddPlanning {
+    /// Persist whether the collab feature is enabled in the appropriate config.
+    PersistCollabFeature {
         enabled: bool,
     },
 
