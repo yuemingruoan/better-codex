@@ -65,10 +65,12 @@ use codex_core::protocol::SessionSource;
 use codex_core::protocol::SkillErrorInfo;
 use codex_core::protocol::TokenUsage;
 use codex_core::terminal::terminal_info;
+#[cfg(target_os = "windows")]
+use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::Language;
 #[cfg(target_os = "windows")]
-use codex_protocol::config_types::SandboxMode;
+use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -615,9 +617,8 @@ impl App {
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
         #[cfg(target_os = "windows")]
         {
-            let windows_sandbox_enabled =
-                WindowsSandboxLevel::from_config(&app.config) != WindowsSandboxLevel::Disabled;
-            let should_check = codex_core::get_platform_sandbox(windows_sandbox_enabled).is_some()
+            let should_check = WindowsSandboxLevel::from_config(&app.config)
+                != WindowsSandboxLevel::Disabled
                 && matches!(
                     app.config.sandbox_policy.get(),
                     codex_core::protocol::SandboxPolicy::WorkspaceWrite { .. }
@@ -1936,9 +1937,9 @@ impl App {
                         .await
                     {
                         Ok(()) => {
-                            self.config.set_windows_sandbox_globally(true);
+                            self.config.set_windows_sandbox_enabled(true);
                             self.config
-                                .set_windows_elevated_sandbox_globally(elevated_enabled);
+                                .set_windows_elevated_sandbox_enabled(elevated_enabled);
                             self.chat_widget
                                 .set_feature_enabled(Feature::WindowsSandbox, true);
                             self.chat_widget.set_feature_enabled(
@@ -2309,7 +2310,7 @@ impl App {
                     WindowsSandboxLevel::from_config(&self.config) != WindowsSandboxLevel::Disabled;
                 #[cfg(target_os = "windows")]
                 if !matches!(&policy, codex_core::protocol::SandboxPolicy::ReadOnly)
-                    || codex_core::get_platform_sandbox(windows_sandbox_enabled).is_some()
+                    || windows_sandbox_enabled
                 {
                     self.config.forced_auto_mode_downgraded_on_windows = false;
                 }
@@ -2333,8 +2334,7 @@ impl App {
                         return Ok(AppRunControl::Continue);
                     }
 
-                    let should_check = codex_core::get_platform_sandbox(windows_sandbox_enabled)
-                        .is_some()
+                    let should_check = windows_sandbox_enabled
                         && policy_is_workspace_write_or_ro
                         && !self.chat_widget.world_writable_warning_hidden();
                     if should_check {
