@@ -432,3 +432,14 @@
 
 - Pending items:
   - Local branch deletion for `sdd/1-collab-collab-collab-plan-prox` is still pending because `git branch -d` is blocked by session policy.
+
+## 2026-02-16 执行阶段
+- 门禁检查：`~/.codex/config.toml` 中 `[features].collab = true`，允许进入 parallels 执行
+- Sub-A 交付：`codex-rs/cli/src/main.rs` 完成 TDD（先失败后通过），新增 `select_tui_frontend` 回归测试
+- Sub-B 交付：`codex-rs/cli/Cargo.toml` 依赖修复，移除 `cfg(not(windows))` 对 `codex-tui2` 与 `codex-utils-absolute-path` 的限制
+- 里程碑提交：`b24b8b59` `fix(cli): enable tui2 frontend selection on windows`
+
+## 2026-02-16 集成阶段
+- 主集成验证：`cd codex-rs && just fmt`（通过）
+- 主集成验证：`cd codex-rs && cargo test -p codex-cli`（通过）
+- 残留风险：当前 macOS 环境交叉 `--target x86_64-pc-windows-msvc` 仍报 target/core 解析异常，`T5` 待 Windows 实机复验

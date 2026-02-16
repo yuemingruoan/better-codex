@@ -36,6 +36,8 @@ codex-responses-api-proxy = { workspace = true }
 codex-rmcp-client = { workspace = true }
 codex-stdio-to-uds = { workspace = true }
 codex-tui = { workspace = true }
+codex-tui2 = { workspace = true }
+codex-utils-absolute-path = { workspace = true }
 libc = { workspace = true }
 owo-colors = { workspace = true }
 regex-lite = { workspace = true }
@@ -52,10 +54,6 @@ tokio = { workspace = true, features = [
 toml = { workspace = true }
 tracing = { workspace = true }
 webbrowser = { workspace = true }
-
-[target.'cfg(not(windows))'.dependencies]
-codex-tui2 = { workspace = true }
-codex-utils-absolute-path = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 codex_windows_sandbox = { package = "codex-windows-sandbox", path = "../windows-sandbox-rs" }
