@@ -9,7 +9,7 @@ pub enum UpdateAction {
 
 impl UpdateAction {
     pub const RELEASE_PAGE_URL: &'static str =
-        "https://github.com/yuemingruoan/better-chinese-codex/releases";
+        "https://github.com/yuemingruoan/better-codex/releases";
     /// Returns the list of command-line arguments for invoking the update.
     pub fn command_args(self) -> (&'static str, &'static [&'static str]) {
         match self {

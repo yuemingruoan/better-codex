@@ -17,7 +17,7 @@ impl From<UpdateAction> for codex_tui::update_action::UpdateAction {
 
 impl UpdateAction {
     pub const RELEASE_PAGE_URL: &'static str =
-        "https://github.com/yuemingruoan/better-chinese-codex/releases";
+        "https://github.com/yuemingruoan/better-codex/releases";
 
     pub fn release_url(self) -> &'static str {
         Self::RELEASE_PAGE_URL

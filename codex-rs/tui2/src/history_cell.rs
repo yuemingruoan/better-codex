@@ -572,7 +572,7 @@ impl HistoryCell for UpdateAvailableHistoryCell {
         } else {
             line![
                 tr(self.language, "history.update.visit_prefix"),
-                "https://github.com/yuemingruoan/better-chinese-codex/releases"
+                "https://github.com/yuemingruoan/better-codex/releases"
                     .cyan()
                     .underlined(),
                 tr(self.language, "history.update.download_suffix")
@@ -589,7 +589,7 @@ impl HistoryCell for UpdateAvailableHistoryCell {
             update_instruction,
             "",
             tr(self.language, "history.update.release_notes"),
-            "https://github.com/yuemingruoan/better-chinese-codex/releases/latest"
+            "https://github.com/yuemingruoan/better-codex/releases/latest"
                 .cyan()
                 .underlined(),
         ];

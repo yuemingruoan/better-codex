@@ -17,7 +17,7 @@ Codex CLI 是一套跨平台的开发辅助工具链，内含命令行界面、T
 ## 安装 / 更新指南
 
 ### 1. 获取最新版本
-- 打开本仓库的[发布页面](https://github.com/yuemingruoan/better-chinese-codex/releases)，Release 标题通常为 `v1.3.0`、`v1.2.1` 这类语义化版本号。
+- 打开本仓库的[发布页面](https://github.com/yuemingruoan/better-codex/releases)，Release 标题通常为 `v1.3.0`、`v1.2.1` 这类语义化版本号。
 - 在最新 Release 的 **Assets** 区域中，根据平台下载对应压缩包或可执行文件（Windows、macOS、Linux 皆会提供，各文件名已在说明中标注）。
 - 解压得到的二进制文件后：
   - Windows 重命名为 `codex.exe`；
@@ -56,7 +56,7 @@ npm install -g @openai/codex-cli
    安装完成后终端直接运行 `codex` 即可启动。若升级过程中遇到 Homebrew 缓存或权限问题，可参考 [FAQ 关于 `brew upgrade codex` 的章节](./docs/faq.md#brew-upgrade-codex-isnt-upgrading-me)。
 
 <details>
-<summary>也可以直接前往 <a href="https://github.com/openai/codex/releases/latest">最新 GitHub Release</a> 下载与你平台匹配的二进制文件</summary>
+<summary>也可以直接前往 <a href="https://github.com/yuemingruoan/better-codex/releases/latest">最新 GitHub Release</a> 下载与你平台匹配的二进制文件</summary>
 
 每个 Release 都会附带多份可执行文件，常用条目如下：
 

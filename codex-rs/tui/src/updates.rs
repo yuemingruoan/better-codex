@@ -57,7 +57,8 @@ struct VersionInfo {
 const VERSION_FILENAME: &str = "version.json";
 // We use the latest version from the cask if installation is via homebrew - homebrew does not immediately pick up the latest release and can lag behind.
 const HOMEBREW_CASK_API_URL: &str = "https://formulae.brew.sh/api/cask/codex.json";
-const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/openai/codex/releases/latest";
+const LATEST_RELEASE_URL: &str =
+    "https://api.github.com/repos/yuemingruoan/better-codex/releases/latest";
 
 #[derive(Deserialize, Debug, Clone)]
 struct ReleaseInfo {
@@ -128,10 +129,22 @@ fn is_newer(latest: &str, current: &str) -> Option<bool> {
 }
 
 fn extract_version_from_latest_tag(latest_tag_name: &str) -> anyhow::Result<String> {
-    latest_tag_name
-        .strip_prefix("rust-v")
-        .map(str::to_owned)
-        .ok_or_else(|| anyhow::anyhow!("Failed to parse latest tag name '{latest_tag_name}'"))
+    let trimmed = latest_tag_name.trim();
+    for prefix in ["rust-v", "v"] {
+        if let Some(stripped) = trimmed.strip_prefix(prefix)
+            && parse_version(stripped).is_some()
+        {
+            return Ok(stripped.to_string());
+        }
+    }
+
+    if parse_version(trimmed).is_some() {
+        Ok(trimmed.to_string())
+    } else {
+        Err(anyhow::anyhow!(
+            "Failed to parse latest tag name '{latest_tag_name}'"
+        ))
+    }
 }
 
 /// Returns the latest version to show in a popup, if it should be shown.
@@ -205,8 +218,24 @@ mod tests {
     }
 
     #[test]
-    fn latest_tag_without_prefix_is_invalid() {
-        assert!(extract_version_from_latest_tag("v1.5.0").is_err());
+    fn extracts_version_with_v_prefix() {
+        assert_eq!(
+            extract_version_from_latest_tag("v1.5.0").expect("failed to parse version"),
+            "1.5.0"
+        );
+    }
+
+    #[test]
+    fn extracts_version_without_prefix() {
+        assert_eq!(
+            extract_version_from_latest_tag("1.5.0").expect("failed to parse version"),
+            "1.5.0"
+        );
+    }
+
+    #[test]
+    fn invalid_latest_tag_is_rejected() {
+        assert!(extract_version_from_latest_tag("latest").is_err());
     }
 
     #[test]
