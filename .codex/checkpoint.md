@@ -450,3 +450,9 @@
 - Windows 交叉检查现状：`cd codex-rs && cargo check -p codex-cli --target x86_64-pc-windows-msvc` 在当前环境失败（`E0463: can't find crate for core/std`），需 Windows 实机/标准工具链环境复验 `T5`。
 - 现场清理：无额外 worktree、无临时日志/过渡产物残留。
 - 清理阻塞：尝试删除本地分支 `sdd/windows-tui2-bug` 被会话策略拦截（blocked by policy），需后续在允许策略下执行。
+
+## 2026-02-16 脱离 Fork 网络（执行阻塞）
+- 已完成安全备份：`/Users/shiyu/Documents/Project/repo-backups/better-codex-mirror-20260216-200700.git`，并记录元数据与 HEAD。
+- 目标仓库：`yuemingruoan/better-codex`（`isFork=true`，`PUBLIC`）。
+- 阻塞点：执行 `gh repo delete yuemingruoan/better-codex --yes` 返回 `HTTP 403`，当前 GH token 缺少 `delete_repo` scope。
+- 后续动作：需先执行 `gh auth refresh -h github.com -s delete_repo` 完成授权，再继续删除重建与镜像回推流程。
