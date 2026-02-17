@@ -17,10 +17,9 @@
 
 "use strict";
 
+import axios from "axios";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
-import http from "node:http";
-import https from "node:https";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -28,67 +27,85 @@ import { pipeline } from "node:stream/promises";
 
 const RELEASE_LATEST_URL =
   "https://github.com/yuemingruoan/better-codex/releases/latest";
+const DOWNLOAD_TIMEOUT_MS = 30_000;
 
-const PLATFORM_OPTIONS = {
+type Platform = "linux" | "macos" | "windows";
+
+type PlatformOption = {
+  archiveName: string;
+  archiveType: "tar.gz" | "zip";
+  binaryCandidates: string[];
+};
+
+const PLATFORM_OPTIONS: Record<Platform, PlatformOption> = {
   linux: {
     archiveName: "codex-linux.tar.gz",
     archiveType: "tar.gz",
-    binaryName: "codex-linux",
+    binaryCandidates: ["codex-linux", "codex"],
   },
   macos: {
     archiveName: "codex-macos.tar.gz",
     archiveType: "tar.gz",
-    binaryName: "codex-macos",
+    binaryCandidates: ["codex-macos", "codex"],
   },
   windows: {
     archiveName: "codex-windows.zip",
     archiveType: "zip",
-    binaryName: "codex-windows.exe",
+    binaryCandidates: ["codex-windows.exe", "codex.exe", "codex"],
   },
-} as const;
+};
 
-function parsePlatform(argv: string[]): "linux" | "macos" | "windows" {
-  let platform = "linux";
+function detectPlatformByRuntime(): Platform {
+  switch (process.platform) {
+    case "linux":
+      return "linux";
+    case "darwin":
+      return "macos";
+    case "win32":
+      return "windows";
+    default:
+      throw new Error(
+        `不支持的运行平台 / Unsupported runtime platform: ${process.platform}`,
+      );
+  }
+}
+
+function parsePlatform(argv: string[]): Platform {
+  let platform = detectPlatformByRuntime();
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
+
     if (arg === "--help" || arg === "-h") {
       printUsage();
       process.exit(0);
     }
 
     if (arg.startsWith("--platform=")) {
-      platform = arg.slice("--platform=".length).trim();
+      platform = normalizePlatform(arg.slice("--platform=".length).trim());
       continue;
     }
 
     if (arg === "--platform") {
       const nextArg = argv[index + 1];
       if (!nextArg) {
-        throw new Error("--platform 缺少参数，例如 --platform=linux");
+        throw new Error(
+          "--platform 缺少参数 / Missing value for --platform, e.g. --platform=linux",
+        );
       }
-      platform = nextArg.trim();
+      platform = normalizePlatform(nextArg.trim());
       index += 1;
       continue;
     }
 
-    throw new Error(`不支持的参数: ${arg}`);
+    throw new Error(`不支持的参数 / Unsupported argument: ${arg}`);
   }
 
-  const normalizedPlatform = normalizePlatform(platform);
-  if (!normalizedPlatform) {
-    throw new Error(`不支持的平台: ${platform}`);
-  }
-
-  return normalizedPlatform;
+  return platform;
 }
 
-function normalizePlatform(
-  platform: string,
-): "linux" | "macos" | "windows" | null {
-  const value = platform.trim().toLowerCase();
-
-  switch (value) {
+function normalizePlatform(value: string): Platform {
+  switch (value.trim().toLowerCase()) {
     case "linux":
       return "linux";
     case "mac":
@@ -100,12 +117,17 @@ function normalizePlatform(
     case "windows":
       return "windows";
     default:
-      return null;
+      throw new Error(`不支持的平台 / Unsupported platform: ${value}`);
   }
 }
 
 function printUsage() {
-  console.log("用法: node scripts/update.js [--platform=linux|macos|windows]");
+  console.log(
+    "用法 / Usage: node scripts/update.ts [--platform=linux|macos|windows]",
+  );
+  console.log(
+    "默认会自动检测当前平台 / Current platform is auto-detected by default.",
+  );
 }
 
 function runCommand(command: string, args: string[]): string {
@@ -117,62 +139,11 @@ function runCommand(command: string, args: string[]): string {
   if (result.status !== 0) {
     const stderr = (result.stderr || "").trim();
     const stdout = (result.stdout || "").trim();
-    const message = stderr || stdout || `${command} 执行失败`;
+    const message = stderr || stdout || `${command} 执行失败 / command failed`;
     throw new Error(message);
   }
 
   return (result.stdout || "").trim();
-}
-
-/**
- * @returns {string}
- */
-function findCodexBinaryPath() {
-  const command = process.platform === "win32" ? "where" : "which";
-  const result = runCommand(command, ["codex"]);
-  const foundPath = result
-    .split(/\r?\n/u)
-    .map((line) => line.trim())
-    .find(Boolean);
-
-  if (!foundPath) {
-    throw new Error("未找到 codex 可执行文件，请先确认 codex 在 PATH 中");
-  }
-
-  const externalResolvedPath = resolvePathWithExternalTools(foundPath);
-  if (externalResolvedPath) {
-    return externalResolvedPath;
-  }
-
-  return resolvePathWithReadlink(foundPath);
-}
-
-function resolvePathWithExternalTools(filePath: string) {
-  if (process.platform === "win32") {
-    return null;
-  }
-
-  const candidates = [
-    ["realpath", [filePath]],
-    ["readlink", ["-f", filePath]],
-  ] as Array<[string, string[]]>;
-
-  for (const [command, args] of candidates) {
-    try {
-      const resolvedPath = runCommand(command, args)
-        .split(/\r?\n/u)
-        .map((line) => line.trim())
-        .find(Boolean);
-
-      if (resolvedPath) {
-        return resolvedPath;
-      }
-    } catch {
-      // 继续尝试下一个命令
-    }
-  }
-
-  return null;
 }
 
 function resolvePathWithReadlink(filePath: string): string {
@@ -192,7 +163,215 @@ function resolvePathWithReadlink(filePath: string): string {
     resolvedPath = path.resolve(path.dirname(resolvedPath), linkTarget);
   }
 
-  throw new Error(`符号链接层级过深: ${filePath}`);
+  throw new Error(`符号链接层级过深 / Symlink depth exceeded: ${filePath}`);
+}
+
+function findCodexEntryPath(): string {
+  const command = process.platform === "win32" ? "where" : "which";
+  const result = runCommand(command, ["codex"]);
+  const firstPath = result
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .find(Boolean);
+
+  if (!firstPath) {
+    throw new Error(
+      "未找到 codex 命令 / codex command is not in PATH. Please install codex first.",
+    );
+  }
+
+  return firstPath;
+}
+
+function isLikelyNodeScript(filePath: string): boolean {
+  const ext = path.extname(filePath).toLowerCase();
+  if (ext === ".js" || ext === ".mjs" || ext === ".cjs") {
+    return true;
+  }
+
+  try {
+    const fd = fs.openSync(filePath, "r");
+    try {
+      const buffer = Buffer.alloc(160);
+      const bytes = fs.readSync(fd, buffer, 0, buffer.length, 0);
+      const head = buffer.toString("utf8", 0, bytes).toLowerCase();
+      return head.startsWith("#!/") && head.includes("node");
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return false;
+  }
+}
+
+function isExecutableFile(filePath: string): boolean {
+  try {
+    const stat = fs.statSync(filePath);
+    if (!stat.isFile()) {
+      return false;
+    }
+
+    if (process.platform === "win32") {
+      return true;
+    }
+
+    return (stat.mode & 0o111) !== 0;
+  } catch {
+    return false;
+  }
+}
+
+function getTargetTriple(): string | null {
+  const { platform, arch } = process;
+
+  switch (platform) {
+    case "linux":
+    case "android":
+      switch (arch) {
+        case "x64":
+          return "x86_64-unknown-linux-musl";
+        case "arm64":
+          return "aarch64-unknown-linux-musl";
+        default:
+          return null;
+      }
+    case "darwin":
+      switch (arch) {
+        case "x64":
+          return "x86_64-apple-darwin";
+        case "arm64":
+          return "aarch64-apple-darwin";
+        default:
+          return null;
+      }
+    case "win32":
+      switch (arch) {
+        case "x64":
+          return "x86_64-pc-windows-msvc";
+        case "arm64":
+          return "aarch64-pc-windows-msvc";
+        default:
+          return null;
+      }
+    default:
+      return null;
+  }
+}
+
+function collectBinaryCandidates(
+  rootDir: string,
+  binaryName: string,
+): string[] {
+  const found: string[] = [];
+  const stack: string[] = [rootDir];
+
+  while (stack.length > 0) {
+    const currentDir = stack.pop();
+    if (!currentDir) {
+      continue;
+    }
+
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(currentDir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    for (const entry of entries) {
+      const fullPath = path.join(currentDir, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(fullPath);
+        continue;
+      }
+
+      if (
+        (entry.isFile() || entry.isSymbolicLink()) &&
+        entry.name === binaryName
+      ) {
+        found.push(fullPath);
+      }
+    }
+  }
+
+  return found;
+}
+
+function resolveBinaryFromNodeWrapper(wrapperPath: string): string | null {
+  const targetTriple = getTargetTriple();
+  const codexBinaryName = process.platform === "win32" ? "codex.exe" : "codex";
+
+  let currentDir = path.dirname(wrapperPath);
+  for (let depth = 0; depth < 8; depth += 1) {
+    const vendorDir = path.join(currentDir, "vendor");
+    if (isDirectory(vendorDir)) {
+      if (targetTriple) {
+        const expectedPath = path.join(
+          vendorDir,
+          targetTriple,
+          "codex",
+          codexBinaryName,
+        );
+        if (
+          isExecutableFile(expectedPath) &&
+          !isLikelyNodeScript(expectedPath)
+        ) {
+          return expectedPath;
+        }
+      }
+
+      const candidates = collectBinaryCandidates(vendorDir, codexBinaryName)
+        .filter((candidate) => isExecutableFile(candidate))
+        .filter((candidate) => !isLikelyNodeScript(candidate));
+
+      if (candidates.length > 0 && targetTriple) {
+        const preferred = candidates.find((candidate) =>
+          candidate.includes(`${path.sep}${targetTriple}${path.sep}`),
+        );
+        if (preferred) {
+          return preferred;
+        }
+      }
+
+      if (candidates.length > 0) {
+        return candidates[0];
+      }
+    }
+
+    const parentDir = path.dirname(currentDir);
+    if (parentDir === currentDir) {
+      break;
+    }
+    currentDir = parentDir;
+  }
+
+  return null;
+}
+
+function findCodexBinaryPath(): string {
+  const entryPath = findCodexEntryPath();
+  const resolvedPath = resolvePathWithReadlink(entryPath);
+
+  if (!isLikelyNodeScript(resolvedPath) && isExecutableFile(resolvedPath)) {
+    return resolvedPath;
+  }
+
+  const binaryFromWrapper = resolveBinaryFromNodeWrapper(resolvedPath);
+  if (binaryFromWrapper) {
+    return binaryFromWrapper;
+  }
+
+  throw new Error(
+    `找到了 codex 入口但无法定位二进制文件 / Found codex entry (${resolvedPath}) but failed to locate native codex binary`,
+  );
+}
+
+function isDirectory(filePath: string): boolean {
+  try {
+    return fs.statSync(filePath).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 type DownloadProgressReporter = {
@@ -201,22 +380,21 @@ type DownloadProgressReporter = {
   abort: () => void;
 };
 
-function parseContentLength(
-  contentLengthHeader: string | string[] | undefined,
-): number | null {
-  const contentLengthValue = Array.isArray(contentLengthHeader)
-    ? contentLengthHeader[0]
-    : contentLengthHeader;
-  if (!contentLengthValue) {
-    return null;
+function parseContentLength(value: unknown): number | null {
+  if (typeof value === "number") {
+    return Number.isFinite(value) && value > 0 ? value : null;
   }
 
-  const contentLength = Number(contentLengthValue);
-  if (!Number.isFinite(contentLength) || contentLength <= 0) {
-    return null;
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
   }
 
-  return contentLength;
+  if (Array.isArray(value) && value.length > 0) {
+    return parseContentLength(value[0]);
+  }
+
+  return null;
 }
 
 function formatBytes(bytes: number): string {
@@ -235,11 +413,10 @@ function formatBytes(bytes: number): string {
 }
 
 function createAsciiProgressBar(percent: number, width: number): string {
-  const clampedPercent = Math.max(0, Math.min(percent, 100));
-  const filledWidth =
-    clampedPercent >= 100 ? width : Math.floor((clampedPercent / 100) * width);
-  const emptyWidth = Math.max(0, width - filledWidth);
-  return `[${"#".repeat(filledWidth)}${"-".repeat(emptyWidth)}]`;
+  const clamped = Math.max(0, Math.min(percent, 100));
+  const filled = clamped >= 100 ? width : Math.floor((clamped / 100) * width);
+  const empty = Math.max(0, width - filled);
+  return `[${"#".repeat(filled)}${"-".repeat(empty)}]`;
 }
 
 function createIndeterminateAsciiBar(frame: number, width: number): string {
@@ -247,8 +424,8 @@ function createIndeterminateAsciiBar(frame: number, width: number): string {
     return "[>]";
   }
 
-  const cursorPosition = frame % width;
-  return `[${"-".repeat(cursorPosition)}>${"-".repeat(width - cursorPosition - 1)}]`;
+  const cursor = frame % width;
+  return `[${"-".repeat(cursor)}>${"-".repeat(width - cursor - 1)}]`;
 }
 
 function createDownloadProgressReporter(
@@ -256,34 +433,28 @@ function createDownloadProgressReporter(
 ): DownloadProgressReporter {
   const isTty = Boolean(process.stdout.isTTY);
   const startedAt = Date.now();
-  const progressBarWidth = 30;
+  const barWidth = 30;
   let downloadedBytes = 0;
   let indeterminateFrame = 0;
   let lastRenderAt = 0;
-  let inlineLineLength = 0;
+  let lastLineLength = 0;
   let lastPercentLog = 0;
-  let nextByteLogThreshold = 5 * 1024 * 1024;
+  let nextBytesLog = 5 * 1024 * 1024;
 
-  const getProgressMessage = (): {
-    message: string;
-    percent: number | null;
-  } => {
+  const getMessage = (): { message: string; percent: number | null } => {
     const elapsedSeconds = Math.max((Date.now() - startedAt) / 1000, 0.001);
     const speed = `${formatBytes(downloadedBytes / elapsedSeconds)}/s`;
 
     if (totalBytes) {
       const percent = Math.min((downloadedBytes / totalBytes) * 100, 100);
-      const progressBar = createAsciiProgressBar(percent, progressBarWidth);
-      const message = `下载进度 / Download: ${progressBar} ${percent.toFixed(1)}% (${formatBytes(downloadedBytes)}/${formatBytes(totalBytes)}, ${speed})`;
+      const bar = createAsciiProgressBar(percent, barWidth);
+      const message = `下载进度 / Download: ${bar} ${percent.toFixed(1)}% (${formatBytes(downloadedBytes)}/${formatBytes(totalBytes)}, ${speed})`;
       return { message, percent };
     }
 
-    const progressBar = createIndeterminateAsciiBar(
-      indeterminateFrame,
-      progressBarWidth,
-    );
+    const bar = createIndeterminateAsciiBar(indeterminateFrame, barWidth);
     indeterminateFrame += 1;
-    const message = `下载进度 / Download: ${progressBar} ?? (${formatBytes(downloadedBytes)}, ${speed})`;
+    const message = `下载进度 / Download: ${bar} ?? (${formatBytes(downloadedBytes)}, ${speed})`;
     return { message, percent: null };
   };
 
@@ -294,14 +465,12 @@ function createDownloadProgressReporter(
     }
     lastRenderAt = now;
 
-    const { message, percent } = getProgressMessage();
+    const { message, percent } = getMessage();
 
     if (isTty) {
-      const trailingSpaces = " ".repeat(
-        Math.max(0, inlineLineLength - message.length),
-      );
-      process.stdout.write(`\r${message}${trailingSpaces}`);
-      inlineLineLength = message.length;
+      const spaces = " ".repeat(Math.max(0, lastLineLength - message.length));
+      process.stdout.write(`\r${message}${spaces}`);
+      lastLineLength = message.length;
       return;
     }
 
@@ -314,12 +483,13 @@ function createDownloadProgressReporter(
       return;
     }
 
-    if (!force && downloadedBytes < nextByteLogThreshold) {
+    if (!force && downloadedBytes < nextBytesLog) {
       return;
     }
+
     console.log(message);
-    while (downloadedBytes >= nextByteLogThreshold) {
-      nextByteLogThreshold += 5 * 1024 * 1024;
+    while (downloadedBytes >= nextBytesLog) {
+      nextBytesLog += 5 * 1024 * 1024;
     }
   };
 
@@ -335,7 +505,7 @@ function createDownloadProgressReporter(
       }
     },
     abort: () => {
-      if (isTty && inlineLineLength > 0) {
+      if (isTty && lastLineLength > 0) {
         process.stdout.write("\n");
       }
     },
@@ -345,73 +515,41 @@ function createDownloadProgressReporter(
 async function downloadFile(
   url: string,
   destinationPath: string,
-  redirectCount = 0,
 ): Promise<void> {
-  if (redirectCount > 10) {
-    throw new Error(`下载重定向次数过多: ${url}`);
+  const response = await axios.get(url, {
+    responseType: "stream",
+    timeout: DOWNLOAD_TIMEOUT_MS,
+    maxRedirects: 10,
+    headers: {
+      "User-Agent": "better-codex-update-script",
+      "Accept": "application/octet-stream",
+    },
+  });
+
+  if (response.status !== 200) {
+    response.data.destroy();
+    throw new Error(
+      `下载失败 / Download failed with status: ${response.status}`,
+    );
   }
 
-  const parsedUrl = new URL(url);
-  const client = parsedUrl.protocol === "https:" ? https : http;
+  const totalBytes = parseContentLength(response.headers["content-length"]);
+  const progress = createDownloadProgressReporter(totalBytes);
 
-  await new Promise<void>((resolve, reject) => {
-    const request = client.get(
-      parsedUrl,
-      {
-        headers: {
-          "User-Agent": "better-codex-update-script",
-          "Accept": "application/octet-stream",
-        },
-      },
-      async (response) => {
-        const statusCode = response.statusCode ?? 0;
-        const location = response.headers.location;
-
-        if (statusCode >= 300 && statusCode < 400 && location) {
-          response.resume();
-          const nextUrl = new URL(location, parsedUrl).toString();
-          try {
-            await downloadFile(nextUrl, destinationPath, redirectCount + 1);
-            resolve();
-          } catch (error) {
-            reject(error);
-          }
-          return;
-        }
-
-        if (statusCode !== 200) {
-          response.resume();
-          reject(new Error(`下载失败，HTTP 状态码: ${statusCode}`));
-          return;
-        }
-
-        const totalBytes = parseContentLength(
-          response.headers["content-length"],
-        );
-        const progressReporter = createDownloadProgressReporter(totalBytes);
-        response.on("data", (chunk: Buffer | string) => {
-          const chunkSize =
-            typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.length;
-          progressReporter.onChunk(chunkSize);
-        });
-
-        try {
-          await pipeline(response, fs.createWriteStream(destinationPath));
-          progressReporter.complete();
-          resolve();
-        } catch (error) {
-          progressReporter.abort();
-          await safeRemove(destinationPath);
-          reject(error);
-        }
-      },
-    );
-
-    request.on("error", async (error) => {
-      await safeRemove(destinationPath);
-      reject(error);
-    });
+  response.data.on("data", (chunk: Buffer | string) => {
+    const chunkSize =
+      typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.length;
+    progress.onChunk(chunkSize);
   });
+
+  try {
+    await pipeline(response.data, fs.createWriteStream(destinationPath));
+    progress.complete();
+  } catch (error) {
+    progress.abort();
+    await safeRemove(destinationPath);
+    throw error;
+  }
 }
 
 function extractArchive(
@@ -429,23 +567,56 @@ function extractArchive(
 
 async function findExtractedBinary(
   extractDir: string,
-  preferredName: string,
+  binaryCandidates: string[],
 ): Promise<string> {
-  const preferredPath = path.join(extractDir, preferredName);
-  if (await pathExists(preferredPath)) {
-    return preferredPath;
-  }
-
-  const entries = await fsp.readdir(extractDir, { withFileTypes: true });
-  const matchedEntry = entries.find(
-    (entry) => entry.isFile() && entry.name.startsWith("codex"),
+  const targetNames = new Set(
+    binaryCandidates.map((name) => name.toLowerCase()),
   );
+  const queue = [extractDir];
+  let fallbackPath: string | null = null;
 
-  if (!matchedEntry) {
-    throw new Error("解压后未找到 codex 可执行文件");
+  while (queue.length > 0) {
+    const currentDir = queue.shift();
+    if (!currentDir) {
+      continue;
+    }
+
+    const entries = await fsp.readdir(currentDir, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(currentDir, entry.name);
+
+      if (entry.isDirectory()) {
+        queue.push(fullPath);
+        continue;
+      }
+
+      if (!entry.isFile() && !entry.isSymbolicLink()) {
+        continue;
+      }
+
+      const normalizedName = entry.name.toLowerCase();
+      if (targetNames.has(normalizedName)) {
+        return fullPath;
+      }
+
+      if (
+        !fallbackPath &&
+        normalizedName.startsWith("codex") &&
+        !normalizedName.endsWith(".js") &&
+        !normalizedName.endsWith(".ts")
+      ) {
+        fallbackPath = fullPath;
+      }
+    }
   }
 
-  return path.join(extractDir, matchedEntry.name);
+  if (fallbackPath) {
+    return fallbackPath;
+  }
+
+  throw new Error(
+    "解压后未找到 codex 可执行文件 / codex binary was not found after extraction",
+  );
 }
 
 async function installBinary(
@@ -480,18 +651,18 @@ async function installBinary(
 
 async function createBackupPath(directory: string): Promise<string> {
   const baseName = formatTimestamp(new Date());
-  let candidatePath = path.join(directory, baseName);
+  let candidate = path.join(directory, baseName);
   let suffix = 1;
 
-  while (await pathExists(candidatePath)) {
-    candidatePath = path.join(
+  while (await pathExists(candidate)) {
+    candidate = path.join(
       directory,
       `${baseName}_${String(suffix).padStart(2, "0")}`,
     );
     suffix += 1;
   }
 
-  return candidatePath;
+  return candidate;
 }
 
 function formatTimestamp(date: Date): string {
@@ -528,15 +699,15 @@ async function safeRename(
   try {
     await fsp.rename(sourcePath, targetPath);
   } catch {
-    // 忽略回滚过程中的错误
+    // ignore rollback failures
   }
 }
 
 async function safeRemove(filePath: string): Promise<void> {
   try {
-    await fsp.rm(filePath, { force: true });
+    await fsp.rm(filePath, { force: true, recursive: true });
   } catch {
-    // 忽略清理过程中的错误
+    // ignore cleanup failures
   }
 }
 
@@ -544,9 +715,10 @@ async function main() {
   const platform = parsePlatform(process.argv.slice(2));
   const platformOption = PLATFORM_OPTIONS[platform];
 
-  console.log(`目标平台: ${platform}`);
-  const codexPath = findCodexBinaryPath();
-  console.log(`真实 codex 路径: ${codexPath}`);
+  console.log(`目标平台 / Platform: ${platform}`);
+
+  const codexBinaryPath = findCodexBinaryPath();
+  console.log(`已定位 codex 二进制 / Located codex binary: ${codexBinaryPath}`);
 
   const tempDir = await fsp.mkdtemp(
     path.join(os.tmpdir(), "better-codex-update-"),
@@ -558,23 +730,26 @@ async function main() {
     await fsp.mkdir(extractDir, { recursive: true });
 
     const downloadUrl = `${RELEASE_LATEST_URL}/download/${platformOption.archiveName}`;
-    console.log(`开始下载: ${downloadUrl}`);
+    console.log(`开始下载 / Start download: ${downloadUrl}`);
     await downloadFile(downloadUrl, archivePath);
 
-    console.log("下载完成，正在解压...");
+    console.log("下载完成，开始解压 / Download complete, extracting...");
     extractArchive(archivePath, extractDir, platformOption.archiveType);
 
     const extractedBinaryPath = await findExtractedBinary(
       extractDir,
-      platformOption.binaryName,
+      platformOption.binaryCandidates,
     );
 
-    console.log("解压完成，正在替换旧版本...");
-    const backupPath = await installBinary(codexPath, extractedBinaryPath);
+    console.log("解压完成，开始安装 / Extraction complete, installing...");
+    const backupPath = await installBinary(
+      codexBinaryPath,
+      extractedBinaryPath,
+    );
 
-    console.log("更新成功");
-    console.log(`旧版本备份文件: ${backupPath}`);
-    console.log(`新版本路径: ${codexPath}`);
+    console.log("更新成功 / Update completed successfully");
+    console.log(`旧版本备份 / Backup: ${backupPath}`);
+    console.log(`新版本路径 / New binary path: ${codexBinaryPath}`);
   } finally {
     await fsp.rm(tempDir, { recursive: true, force: true });
   }
@@ -582,6 +757,6 @@ async function main() {
 
 main().catch((error) => {
   const message = error instanceof Error ? error.message : String(error);
-  console.error(`更新失败: ${message}`);
+  console.error(`更新失败 / Update failed: ${message}`);
   process.exit(1);
 });
