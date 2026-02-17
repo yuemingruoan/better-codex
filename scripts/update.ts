@@ -195,6 +195,153 @@ function resolvePathWithReadlink(filePath: string): string {
   throw new Error(`符号链接层级过深: ${filePath}`);
 }
 
+type DownloadProgressReporter = {
+  onChunk: (size: number) => void;
+  complete: () => void;
+  abort: () => void;
+};
+
+function parseContentLength(
+  contentLengthHeader: string | string[] | undefined,
+): number | null {
+  const contentLengthValue = Array.isArray(contentLengthHeader)
+    ? contentLengthHeader[0]
+    : contentLengthHeader;
+  if (!contentLengthValue) {
+    return null;
+  }
+
+  const contentLength = Number(contentLengthValue);
+  if (!Number.isFinite(contentLength) || contentLength <= 0) {
+    return null;
+  }
+
+  return contentLength;
+}
+
+function formatBytes(bytes: number): string {
+  const units = ["B", "KB", "MB", "GB", "TB"] as const;
+  let value = bytes;
+  let unitIndex = 0;
+
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+
+  const fractionDigits =
+    unitIndex === 0 ? 0 : value >= 100 ? 0 : value >= 10 ? 1 : 2;
+  return `${value.toFixed(fractionDigits)} ${units[unitIndex]}`;
+}
+
+function createAsciiProgressBar(percent: number, width: number): string {
+  const clampedPercent = Math.max(0, Math.min(percent, 100));
+  const filledWidth =
+    clampedPercent >= 100 ? width : Math.floor((clampedPercent / 100) * width);
+  const emptyWidth = Math.max(0, width - filledWidth);
+  return `[${"#".repeat(filledWidth)}${"-".repeat(emptyWidth)}]`;
+}
+
+function createIndeterminateAsciiBar(frame: number, width: number): string {
+  if (width <= 1) {
+    return "[>]";
+  }
+
+  const cursorPosition = frame % width;
+  return `[${"-".repeat(cursorPosition)}>${"-".repeat(width - cursorPosition - 1)}]`;
+}
+
+function createDownloadProgressReporter(
+  totalBytes: number | null,
+): DownloadProgressReporter {
+  const isTty = Boolean(process.stdout.isTTY);
+  const startedAt = Date.now();
+  const progressBarWidth = 30;
+  let downloadedBytes = 0;
+  let indeterminateFrame = 0;
+  let lastRenderAt = 0;
+  let inlineLineLength = 0;
+  let lastPercentLog = 0;
+  let nextByteLogThreshold = 5 * 1024 * 1024;
+
+  const getProgressMessage = (): {
+    message: string;
+    percent: number | null;
+  } => {
+    const elapsedSeconds = Math.max((Date.now() - startedAt) / 1000, 0.001);
+    const speed = `${formatBytes(downloadedBytes / elapsedSeconds)}/s`;
+
+    if (totalBytes) {
+      const percent = Math.min((downloadedBytes / totalBytes) * 100, 100);
+      const progressBar = createAsciiProgressBar(percent, progressBarWidth);
+      const message = `下载进度 / Download: ${progressBar} ${percent.toFixed(1)}% (${formatBytes(downloadedBytes)}/${formatBytes(totalBytes)}, ${speed})`;
+      return { message, percent };
+    }
+
+    const progressBar = createIndeterminateAsciiBar(
+      indeterminateFrame,
+      progressBarWidth,
+    );
+    indeterminateFrame += 1;
+    const message = `下载进度 / Download: ${progressBar} ?? (${formatBytes(downloadedBytes)}, ${speed})`;
+    return { message, percent: null };
+  };
+
+  const render = (force: boolean) => {
+    const now = Date.now();
+    if (!force && now - lastRenderAt < 120) {
+      return;
+    }
+    lastRenderAt = now;
+
+    const { message, percent } = getProgressMessage();
+
+    if (isTty) {
+      const trailingSpaces = " ".repeat(
+        Math.max(0, inlineLineLength - message.length),
+      );
+      process.stdout.write(`\r${message}${trailingSpaces}`);
+      inlineLineLength = message.length;
+      return;
+    }
+
+    if (percent !== null) {
+      if (!force && percent < lastPercentLog + 10) {
+        return;
+      }
+      console.log(message);
+      lastPercentLog = Math.floor(percent / 10) * 10;
+      return;
+    }
+
+    if (!force && downloadedBytes < nextByteLogThreshold) {
+      return;
+    }
+    console.log(message);
+    while (downloadedBytes >= nextByteLogThreshold) {
+      nextByteLogThreshold += 5 * 1024 * 1024;
+    }
+  };
+
+  return {
+    onChunk: (size: number) => {
+      downloadedBytes += size;
+      render(false);
+    },
+    complete: () => {
+      render(true);
+      if (isTty) {
+        process.stdout.write("\n");
+      }
+    },
+    abort: () => {
+      if (isTty && inlineLineLength > 0) {
+        process.stdout.write("\n");
+      }
+    },
+  };
+}
+
 async function downloadFile(
   url: string,
   destinationPath: string,
@@ -238,10 +385,22 @@ async function downloadFile(
           return;
         }
 
+        const totalBytes = parseContentLength(
+          response.headers["content-length"],
+        );
+        const progressReporter = createDownloadProgressReporter(totalBytes);
+        response.on("data", (chunk: Buffer | string) => {
+          const chunkSize =
+            typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.length;
+          progressReporter.onChunk(chunkSize);
+        });
+
         try {
           await pipeline(response, fs.createWriteStream(destinationPath));
+          progressReporter.complete();
           resolve();
         } catch (error) {
+          progressReporter.abort();
           await safeRemove(destinationPath);
           reject(error);
         }
