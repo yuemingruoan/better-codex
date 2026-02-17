@@ -14,10 +14,14 @@ export default {
     banner: "#!/usr/bin/env node",
   },
   plugins: [
+    typescript({
+      tsconfig: "./tsconfig.json",
+      outDir: "scripts",
+      sourceMap: false,
+    }),
     nodeResolve({ preferBuiltins: true }),
     commonjs(),
     json(),
-    typescript({ tsconfig: "./tsconfig.json", sourceMap: false }),
   ],
   external: [], // bundle all except node builtins
 };
