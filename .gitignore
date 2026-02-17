@@ -98,4 +98,4 @@ __pycache__/
 .codex/checkpoint.md
 
 # ignore rollup bundled update.js
-scripts/update.js
+**/update.js

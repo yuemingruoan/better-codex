@@ -16,6 +16,6 @@
     "lib": ["ES2020", "DOM"],
     "sourceMap": false
   },
-  "include": ["./update.ts"],
-  "exclude": ["node_modules", "dist", "scripts/update.js"]
+  "include": ["./*.ts"],
+  "exclude": ["node_modules", "dist", "./update.js"]
 }

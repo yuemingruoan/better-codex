@@ -3,7 +3,7 @@
   "private": true,
   "description": "Tools for repo-wide maintenance.",
   "scripts": {
-    "build:update": "rollup -c scritps/update/rollup.config.mjs",
+    "build:update": "rollup -c scripts/update/rollup.config.mjs",
     "format": "prettier --check *.json *.md docs/*.md .github/workflows/*.yml **/*.js",
     "format:fix": "prettier --write *.json *.md docs/*.md .github/workflows/*.yml **/*.js"
   },
