@@ -7,7 +7,7 @@ import json from "@rollup/plugin-json";
 import terser from "@rollup/plugin-terser";
 
 const inputFile = path.resolve(import.meta.dirname, "update.ts");
-const outputFile = path.resolve(import.meta.dirname, "update.js");
+const outputFile = path.resolve(import.meta.dirname, "better-codex-update.js");
 const tsconfigFile = path.resolve(import.meta.dirname, "tsconfig.json");
 
 /** @type {import('rollup').RollupOptions} */

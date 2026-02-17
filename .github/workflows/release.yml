@@ -119,13 +119,30 @@ jobs:
         with:
           path: dist
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install update build dependencies
+        run: npm install
+
+      - name: Build better-codex update script
+        run: npm run build:update
+
+      - name: Prepare update script asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp scripts/update/better-codex-update.js dist/better-codex-update.js
+
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          mapfile -t assets < <(find dist -type f \( -name '*.tar.gz' -o -name '*.zip' \))
+          mapfile -t assets < <(find dist -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name 'better-codex-update.js' \))
           if [[ ${#assets[@]} -eq 0 ]]; then
             echo "No release assets found under dist/"
             exit 1
