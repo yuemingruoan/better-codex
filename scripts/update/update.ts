@@ -104,6 +104,20 @@ function parsePlatform(argv: string[]): Platform {
   return platform;
 }
 
+function assertRuntimeSupportsPlatform(platform: Platform) {
+  if (platform === "macos" && process.platform !== "darwin") {
+    throw new Error(
+      "macOS 安装包只能在 macOS 上安装 / macOS archives can only be installed on macOS runtime",
+    );
+  }
+
+  if (platform === "macos" && process.arch !== "arm64") {
+    throw new Error(
+      `macOS 仅支持 Apple Silicon (arm64)，当前架构为 ${process.arch} / macOS supports Apple Silicon (arm64) only, current arch: ${process.arch}`,
+    );
+  }
+}
+
 function normalizePlatform(value: string): Platform {
   switch (value.trim().toLowerCase()) {
     case "linux":
@@ -127,6 +141,9 @@ function printUsage() {
   );
   console.log(
     "默认会自动检测当前平台 / Current platform is auto-detected by default.",
+  );
+  console.log(
+    "macOS 仅支持 Apple Silicon (arm64)，不支持 Intel (x86_64) / macOS supports Apple Silicon (arm64) only.",
   );
 }
 
@@ -713,6 +730,7 @@ async function safeRemove(filePath: string): Promise<void> {
 
 async function main() {
   const platform = parsePlatform(process.argv.slice(2));
+  assertRuntimeSupportsPlatform(platform);
   const platformOption = PLATFORM_OPTIONS[platform];
 
   console.log(`目标平台 / Platform: ${platform}`);
