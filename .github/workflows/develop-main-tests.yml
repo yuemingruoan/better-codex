@@ -1,0 +1,74 @@
+name: Develop Main Tests
+
+on:
+  push:
+    branches:
+      - develop-main
+  pull_request:
+    branches:
+      - develop-main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: develop-main-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  update-script-tests:
+    name: Update script tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-14
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build update script
+        run: pnpm run build:update
+
+      - name: Smoke test update script help output
+        run: node scripts/update/better-codex-update.js --help
+
+      - name: Ensure macOS runtime guard fails on Linux
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          set +e
+          output="$(node scripts/update/better-codex-update.js --platform=macos 2>&1)"
+          status=$?
+          set -e
+
+          printf '%s\n' "$output"
+
+          if [[ $status -eq 0 ]]; then
+            echo "Expected macOS runtime guard to fail on Linux"
+            exit 1
+          fi
+
+          if ! grep -Eq "macOS 安装包只能在 macOS 上安装|macOS archives can only be installed on macOS runtime" <<<"$output"; then
+            echo "Expected macOS runtime guard message not found"
+            exit 1
+          fi
