@@ -16,6 +16,31 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  cargo-tests:
+    name: Cargo tests (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: always
+    defaults:
+      run:
+        working-directory: codex-rs
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        continue-on-error: true
+        with:
+          workspaces: codex-rs -> target
+
+      - name: Run cargo test
+        run: cargo test --all-features --locked
+
   update-script-tests:
     name: Update script tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
