@@ -1,6 +1,6 @@
-# TUI 流式分块（Stream Chunking）
+# TUI2 流式分块（Stream Chunking）
 
-本文说明 TUI 中流式分块的工作方式及其设计原因。
+本文说明 TUI2 中流式分块的工作方式及其设计原因。
 
 ## 问题
 
@@ -22,13 +22,13 @@
 
 ## 逻辑所在位置
 
-- `codex-rs/tui/src/streaming/chunking.rs`
+- `codex-rs/tui2/src/streaming/chunking.rs`
   - 自适应策略、模式切换与 drain 计划选择。
-- `codex-rs/tui/src/streaming/commit_tick.rs`
+- `codex-rs/tui2/src/streaming/commit_tick.rs`
   - 每次提交 tick 的编排：快照、决策、drain、追踪。
-- `codex-rs/tui/src/streaming/controller.rs`
+- `codex-rs/tui2/src/streaming/controller.rs`
   - commit-tick 编排使用的队列/drain 基元。
-- `codex-rs/tui/src/chatwidget.rs`
+- `codex-rs/tui2/src/chatwidget.rs`
   - 集成点：触发 commit-tick 编排并处理 UI 生命周期事件。
 
 ## 运行流程

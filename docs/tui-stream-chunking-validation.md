@@ -1,4 +1,4 @@
-# TUI 流式分块验证流程
+# TUI2 流式分块验证流程
 
 本文记录用于验证自适应流式分块与防抖行为的流程。
 
@@ -13,7 +13,7 @@
 
 分块观测由以下 trace 输出：
 
-- `codex_tui::streaming::commit_tick`
+- `streaming::commit_tick`（TUI2 提交节奏追踪目标）
 
 使用两条 trace 消息：
 
@@ -25,7 +25,7 @@
 启用 chunking trace 运行 Codex：
 
 ```bash
-RUST_LOG='codex_tui::streaming::commit_tick=trace,codex_tui=info,codex_core=info,codex_rmcp_client=info' \
+RUST_LOG='streaming::commit_tick=trace,codex_core=info,codex_rmcp_client=info' \
   just codex --enable=responses_websockets
 ```
 
