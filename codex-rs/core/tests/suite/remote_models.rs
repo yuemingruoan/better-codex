@@ -727,9 +727,10 @@ async fn remote_models_request_times_out_after_5s() -> Result<()> {
     let elapsed = start.elapsed();
     // get_model should return a default model even when refresh times out
     let default_model = model.expect("get_model should finish and return default model");
-    assert!(
-        default_model == "gpt-5.2-codex",
-        "get_model should return default model when refresh times out, got: {default_model}"
+    let expected_default_model = bundled_model_slug();
+    assert_eq!(
+        default_model, expected_default_model,
+        "get_model should return default model when refresh times out"
     );
     let _ = server
         .received_requests()
@@ -788,7 +789,7 @@ async fn remote_models_hide_picker_only_models() -> Result<()> {
     let selected = manager
         .get_default_model(&None, &config, RefreshStrategy::OnlineIfUncached)
         .await;
-    assert_eq!(selected, "gpt-5.2-codex");
+    assert_eq!(selected, bundled_model_slug());
 
     let available = manager
         .list_models(&config, RefreshStrategy::OnlineIfUncached)
