@@ -2205,13 +2205,15 @@ mod tests {
         let config = turn.config.as_ref().clone();
         for i in 0..crate::config::DEFAULT_COLLAB_MAX_ACTIVE_SUBAGENTS_PER_THREAD {
             let _ = control
-                .spawn_agent_with_metadata(
+                .spawn_agent_with_metadata_and_source(
                     config.clone(),
-                    format!("child-{i}"),
                     AgentSpawnMetadata {
                         creator_thread_id: Some(root_thread_id),
+                        label: Some(format!("child-{i}")),
                         ..AgentSpawnMetadata::default()
                     },
+                    Vec::new(),
+                    None,
                 )
                 .await
                 .expect("spawn child");
