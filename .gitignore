@@ -67,8 +67,10 @@ coverage/
 
 # personal files
 personal/
-checkpoint.md
-.codex/
+
+# keep only shared agent guidance in repo
+.codex/*
+!.codex/AGENTS.md
 
 # os
 .DS_Store
@@ -94,8 +96,6 @@ codex-rs/.cargo-home/*
 __pycache__/
 *.pyc
 
-.codex
-.codex/checkpoint.md
 
 # ignore rollup bundled update.js
 **/update.js
