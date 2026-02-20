@@ -119,13 +119,64 @@ jobs:
         with:
           path: dist
 
+      - name: Verify macOS artifact is Apple Silicon only
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          macos_archive="$(find dist -type f -name 'codex-macos.tar.gz' | head -n 1)"
+          if [[ -z "$macos_archive" ]]; then
+            echo "codex-macos.tar.gz not found under dist/"
+            exit 1
+          fi
+
+          temp_dir="$(mktemp -d)"
+          trap 'rm -rf "$temp_dir"' EXIT
+          tar -xzf "$macos_archive" -C "$temp_dir"
+
+          macos_binary="$(find "$temp_dir" -type f -name 'codex-macos' | head -n 1)"
+          if [[ -z "$macos_binary" ]]; then
+            echo "codex-macos binary not found after extracting $macos_archive"
+            exit 1
+          fi
+
+          file_output="$(file "$macos_binary")"
+          echo "$file_output"
+
+          if [[ "$file_output" != *"arm64"* ]]; then
+            echo "Expected arm64 macOS artifact, got: $file_output"
+            exit 1
+          fi
+
+          if [[ "$file_output" == *"x86_64"* ]]; then
+            echo "x86_64 macOS artifact is not allowed: $file_output"
+            exit 1
+          fi
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install update build dependencies
+        run: npm install
+
+      - name: Build better-codex update script
+        run: npm run build:update
+
+      - name: Prepare update script asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp scripts/update/better-codex-update.js dist/better-codex-update.js
+
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          mapfile -t assets < <(find dist -type f \( -name '*.tar.gz' -o -name '*.zip' \))
+          mapfile -t assets < <(find dist -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name 'better-codex-update.js' \))
           if [[ ${#assets[@]} -eq 0 ]]; then
             echo "No release assets found under dist/"
             exit 1
