@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## 项目结构与模块组织
-- `codex-rs/`：Rust 工作区与核心实现（重点 crate：`core`、`cli`、`tui`、`exec`、`mcp-server`、`exec-server`）。
+- `codex-rs/`：Rust 工作区与核心实现（重点 crate：`core`、`cli`、`tui2`、`exec`、`mcp-server`、`exec-server`）。
 - `codex-cli/`：历史 TypeScript CLI 包装层（npm 包 `@openai/codex`）。
 - `sdk/typescript/`：TypeScript SDK（npm 包 `@openai/codex-sdk`）。
 - `shell-tool-mcp/`：Shell Tool MCP 服务（npm 包 `@openai/codex-shell-tool-mcp`）。
@@ -35,7 +35,7 @@
 - 文件与测试命名：
   - TS 测试文件遵循 `tests/**/*.test.ts`。
   - 分支建议：`feat/<topic>`、`fix/<topic>`、`chore/<topic>`。
-- 特殊约束：如修改 `codex-rs/tui/src/bottom_pane/` 或 `codex-rs/tui2/src/bottom_pane/`，需同步更新对应目录下 `AGENTS.md` 要求的文档说明。
+- 特殊约束：如修改 `codex-rs/tui2/src/bottom_pane/`，需同步更新该目录下 `AGENTS.md` 要求的文档说明。
 
 ## 分支策略与工作流
 - `main`：稳定发布分支，仅接受 `develop-main -> main` 的 PR，用于正式版本发布。
