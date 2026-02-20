@@ -37,6 +37,8 @@ jobs:
         continue-on-error: true
         with:
           workspaces: codex-rs -> target
+          shared-key: develop-main-cargo-tests
+          cache-on-failure: true
 
       - name: Run cargo test
         run: cargo test --all-features --locked
@@ -63,8 +65,17 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Restore root node_modules cache
+        id: root-node-modules-cache
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node22-root-node-modules-${{ hashFiles('pnpm-lock.yaml') }}
 
       - name: Install dependencies
+        if: steps.root-node-modules-cache.outputs.cache-hit != 'true'
         run: pnpm install --frozen-lockfile
 
       - name: Build update script
