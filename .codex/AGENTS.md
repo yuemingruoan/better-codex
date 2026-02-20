@@ -37,6 +37,12 @@
   - 分支建议：`feat/<topic>`、`fix/<topic>`、`chore/<topic>`。
 - 特殊约束：如修改 `codex-rs/tui/src/bottom_pane/` 或 `codex-rs/tui2/src/bottom_pane/`，需同步更新对应目录下 `AGENTS.md` 要求的文档说明。
 
+## 分支策略与工作流
+- `main`：稳定发布分支，仅接受 `develop-main -> main` 的 PR，用于正式版本发布。
+- `develop-main`：日常集成与发布前验证分支，功能与修复应优先合入该分支。
+- `feat/<topic>`、`fix/<topic>`、`chore/<topic>`：短期开发分支，通常向 `develop-main` 发起 PR。
+- 云端测试工作流：`.github/workflows/develop-main-tests.yml` 会在 `develop-main` 的 push/PR 上自动运行（含 Rust 测试与更新脚本冒烟测试）。
+
 ## 测试指引
 - 任何功能改动或缺陷修复都应附带测试或更新现有测试。
 - Rust：优先跑受影响 crate（`cargo test -p <crate>`），再跑全量（`just test` 或 `cargo test --all-features --locked`）。
@@ -44,12 +50,13 @@
   - SDK：`pnpm --filter @openai/codex-sdk run test`，必要时追加 `coverage`。
   - shell-tool-mcp：`pnpm --filter @openai/codex-shell-tool-mcp run test`。
 - 涉及发布更新脚本时，至少执行一次 `node scripts/update/better-codex-update.js --help` 进行冒烟验证。
+- 本地测试建议按改动范围执行最小必要验证；若本地环境受限，可依赖 GitHub Actions 云端 workflow 结果，不强制每次在本地跑全量测试。
 
 ## 提交与合并请求指南
 - Commit message 建议遵循 Conventional Commits（仓库历史常见：`feat:`、`fix:`、`test:`、`ci:`、`chore:`、`doc:`）。
 - 每次提交保持“单一主题 + 可构建 + 可测试”。
 - PR 描述至少包含：`What`（改了什么）、`Why`（为什么改）、`How`（怎么改）、关联 issue/讨论链接。
-- 先在本地跑完相关检查再发起评审，避免可本地发现的 CI 失败。
+- 建议优先在本地跑完受影响范围检查；若受环境限制，可先发起评审并以云端 workflow 验证结果为准。
 - 贡献策略：`docs/contributing.md` 明确“外部代码贡献通常需受邀”；未受邀 PR 可能直接关闭。
 - 分支守卫：面向 `main` 的 PR 仅允许 `develop-main -> main`，其他来源分支会被自动关闭（见 `.github/workflows/main-pr-guard.yml`）。
 
