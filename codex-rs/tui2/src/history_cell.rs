@@ -1273,14 +1273,18 @@ impl HistoryCell for McpToolCallCell {
         } else {
             tr(self.language, "history.mcp.calling")
         };
+        let emphasize_output_hierarchy = matches!(
+            &self.result,
+            Some(Ok(mcp_types::CallToolResult { content, .. })) if content.len() > 1
+        );
 
         let invocation_line = line_to_static(&format_mcp_invocation(self.invocation.clone()));
         let mut compact_spans = vec![bullet.clone(), " ".into(), header_text.bold(), " ".into()];
         let mut compact_header = Line::from(compact_spans.clone());
         let reserved = compact_header.width();
 
-        let inline_invocation =
-            invocation_line.width() <= (width as usize).saturating_sub(reserved);
+        let inline_invocation = self.result.is_some()
+            && invocation_line.width() <= (width as usize).saturating_sub(reserved);
 
         if inline_invocation {
             compact_header.extend(invocation_line.spans.clone());
@@ -1294,7 +1298,21 @@ impl HistoryCell for McpToolCallCell {
                 .subsequent_indent("    ".into());
             let wrapped = word_wrap_line(&invocation_line, opts);
             let body_lines: Vec<Line<'static>> = wrapped.iter().map(line_to_static).collect();
-            lines.extend(prefix_lines(body_lines, "  └ ".dim(), "    ".into()));
+            let invocation_initial_prefix: Span<'static> = if emphasize_output_hierarchy {
+                "  ├ ".dim()
+            } else {
+                "  └ ".dim()
+            };
+            let invocation_subsequent_prefix: Span<'static> = if emphasize_output_hierarchy {
+                "  │ ".dim()
+            } else {
+                "    ".into()
+            };
+            lines.extend(prefix_lines(
+                body_lines,
+                invocation_initial_prefix,
+                invocation_subsequent_prefix,
+            ));
         }
 
         let mut detail_lines: Vec<Line<'static>> = Vec::new();
@@ -1339,7 +1357,7 @@ impl HistoryCell for McpToolCallCell {
         }
 
         if !detail_lines.is_empty() {
-            let initial_prefix: Span<'static> = if inline_invocation {
+            let initial_prefix: Span<'static> = if inline_invocation || emphasize_output_hierarchy {
                 "  └ ".dim()
             } else {
                 "    ".into()
