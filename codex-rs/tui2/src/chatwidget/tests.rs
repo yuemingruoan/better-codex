@@ -1297,6 +1297,11 @@ async fn exec_history_cell_shows_working_then_completed() {
 
     // Begin command
     let begin = begin_exec(&mut chat, "call-1", "echo done");
+    let active = active_blob(&chat);
+    assert!(
+        active.contains("• Running echo done"),
+        "expected active running state to show command: {active:?}"
+    );
 
     let cells = drain_insert_history(&mut rx);
     assert_eq!(cells.len(), 0, "no exec cell should have been flushed yet");
@@ -1319,6 +1324,10 @@ async fn exec_history_cell_shows_working_then_completed() {
         blob.contains("echo done"),
         "expected command text to be present: {blob:?}"
     );
+    assert!(
+        blob.contains("└ done"),
+        "expected completed output to be rendered as a child line: {blob:?}"
+    );
 }
 
 #[tokio::test]
@@ -1327,6 +1336,11 @@ async fn exec_history_cell_shows_working_then_failed() {
 
     // Begin command
     let begin = begin_exec(&mut chat, "call-2", "false");
+    let active = active_blob(&chat);
+    assert!(
+        active.contains("• Running false"),
+        "expected active running state to show command: {active:?}"
+    );
     let cells = drain_insert_history(&mut rx);
     assert_eq!(cells.len(), 0, "no exec cell should have been flushed yet");
 
@@ -1342,7 +1356,10 @@ async fn exec_history_cell_shows_working_then_failed() {
         blob.contains("• Ran false"),
         "expected command and header text present: {blob:?}"
     );
-    assert!(blob.to_lowercase().contains("bloop"), "expected error text");
+    assert!(
+        blob.contains("└ Bloop"),
+        "expected failed output to be rendered as a child line: {blob:?}"
+    );
 }
 
 #[tokio::test]
