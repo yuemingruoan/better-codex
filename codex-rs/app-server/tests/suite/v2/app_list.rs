@@ -8,6 +8,7 @@ use app_test_support::ChatGptAuthFixture;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
+use app_test_support::write_models_cache;
 use axum::Json;
 use axum::Router;
 use axum::extract::State;
@@ -49,6 +50,7 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 #[tokio::test]
 async fn list_apps_returns_empty_when_connectors_disabled() -> Result<()> {
     let codex_home = TempDir::new()?;
+    write_models_cache(codex_home.path())?;
     let mut mcp = McpProcess::new(codex_home.path()).await?;
 
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
@@ -92,6 +94,7 @@ async fn list_apps_uses_thread_feature_flag_when_thread_id_is_provided() -> Resu
         start_apps_server_with_delays(connectors, tools, Duration::ZERO, Duration::ZERO).await?;
 
     let codex_home = TempDir::new()?;
+    write_models_cache(codex_home.path())?;
     write_connectors_config(codex_home.path(), &server_url)?;
     write_chatgpt_auth(
         codex_home.path(),
@@ -207,6 +210,7 @@ async fn list_apps_emits_updates_and_returns_after_both_lists_load() -> Result<(
     .await?;
 
     let codex_home = TempDir::new()?;
+    write_models_cache(codex_home.path())?;
     write_connectors_config(codex_home.path(), &server_url)?;
     write_chatgpt_auth(
         codex_home.path(),
@@ -322,6 +326,7 @@ async fn list_apps_returns_connectors_with_accessible_flags() -> Result<()> {
     .await?;
 
     let codex_home = TempDir::new()?;
+    write_models_cache(codex_home.path())?;
     write_connectors_config(codex_home.path(), &server_url)?;
     write_chatgpt_auth(
         codex_home.path(),
@@ -445,6 +450,7 @@ async fn list_apps_paginates_results() -> Result<()> {
     .await?;
 
     let codex_home = TempDir::new()?;
+    write_models_cache(codex_home.path())?;
     write_connectors_config(codex_home.path(), &server_url)?;
     write_chatgpt_auth(
         codex_home.path(),
@@ -550,6 +556,7 @@ async fn list_apps_force_refetch_preserves_previous_cache_on_failure() -> Result
         start_apps_server_with_delays(connectors, tools, Duration::ZERO, Duration::ZERO).await?;
 
     let codex_home = TempDir::new()?;
+    write_models_cache(codex_home.path())?;
     write_connectors_config(codex_home.path(), &server_url)?;
     write_chatgpt_auth(
         codex_home.path(),
