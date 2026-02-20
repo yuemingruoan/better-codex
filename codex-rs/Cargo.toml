@@ -39,7 +39,6 @@ members = [
     "responses-api-proxy",
     "stdio-to-uds",
     "otel",
-    "tui",
     "tui2",
     "utils/absolute-path",
     "utils/cargo-bin",
@@ -109,7 +108,6 @@ codex-responses-api-proxy = { path = "responses-api-proxy" }
 codex-rmcp-client = { path = "rmcp-client" }
 codex-state = { path = "state" }
 codex-stdio-to-uds = { path = "stdio-to-uds" }
-codex-tui = { path = "tui" }
 codex-tui2 = { path = "tui2" }
 codex-utils-absolute-path = { path = "utils/absolute-path" }
 codex-utils-cache = { path = "utils/cache" }

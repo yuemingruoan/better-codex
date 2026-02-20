@@ -110,33 +110,3 @@ pub struct Cli {
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
 }
-
-impl From<codex_tui::Cli> for Cli {
-    fn from(cli: codex_tui::Cli) -> Self {
-        Self {
-            prompt: cli.prompt,
-            images: cli.images,
-            resume_picker: cli.resume_picker,
-            resume_last: cli.resume_last,
-            resume_session_id: cli.resume_session_id,
-            resume_show_all: cli.resume_show_all,
-            fork_picker: cli.fork_picker,
-            fork_last: cli.fork_last,
-            fork_session_id: cli.fork_session_id,
-            fork_show_all: cli.fork_show_all,
-            model: cli.model,
-            oss: cli.oss,
-            oss_provider: cli.oss_provider,
-            config_profile: cli.config_profile,
-            sandbox_mode: cli.sandbox_mode,
-            approval_policy: cli.approval_policy,
-            full_auto: cli.full_auto,
-            dangerously_bypass_approvals_and_sandbox: cli.dangerously_bypass_approvals_and_sandbox,
-            cwd: cli.cwd,
-            web_search: cli.web_search,
-            add_dir: cli.add_dir,
-            no_alt_screen: cli.no_alt_screen,
-            config_overrides: cli.config_overrides,
-        }
-    }
-}
