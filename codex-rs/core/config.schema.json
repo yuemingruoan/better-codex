@@ -1075,7 +1075,7 @@
           ],
           "default": {
             "model": "gpt-5.3-codex",
-            "reasoning_effort": "low"
+            "reasoning_effort": "xhigh"
           }
         },
         "grep": {
@@ -1086,7 +1086,7 @@
           ],
           "default": {
             "model": "gpt-5.3-codex",
-            "reasoning_effort": "low"
+            "reasoning_effort": "medium"
           }
         },
         "read": {
@@ -1096,7 +1096,7 @@
             }
           ],
           "default": {
-            "model": "gpt-5.3-codex",
+            "model": "gpt-5.2",
             "reasoning_effort": "low"
           }
         },
@@ -1107,8 +1107,8 @@
             }
           ],
           "default": {
-            "model": "gpt-5.3-codex",
-            "reasoning_effort": "low"
+            "model": "gpt-5.2",
+            "reasoning_effort": "medium"
           }
         },
         "websearch": {
