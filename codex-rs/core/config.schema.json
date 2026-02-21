@@ -1118,8 +1118,8 @@
             }
           ],
           "default": {
-            "model": "gpt-5.3-codex",
-            "reasoning_effort": "low"
+            "model": "o4-mini-deep-research",
+            "reasoning_effort": null
           }
         }
       },

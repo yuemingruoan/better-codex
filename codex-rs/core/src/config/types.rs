@@ -619,7 +619,7 @@ impl Default for SubagentPresetConfig {
 }
 
 /// Per-preset model overrides for built-in sub-agent presets.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct SubagentPresetsConfig {
     #[serde(default)]
@@ -630,8 +630,27 @@ pub struct SubagentPresetsConfig {
     pub grep: SubagentPresetConfig,
     #[serde(default)]
     pub run: SubagentPresetConfig,
-    #[serde(default)]
+    #[serde(default = "default_websearch_subagent_preset")]
     pub websearch: SubagentPresetConfig,
+}
+
+impl Default for SubagentPresetsConfig {
+    fn default() -> Self {
+        Self {
+            edit: SubagentPresetConfig::default(),
+            read: SubagentPresetConfig::default(),
+            grep: SubagentPresetConfig::default(),
+            run: SubagentPresetConfig::default(),
+            websearch: default_websearch_subagent_preset(),
+        }
+    }
+}
+
+fn default_websearch_subagent_preset() -> SubagentPresetConfig {
+    SubagentPresetConfig {
+        model: Some("o4-mini-deep-research".to_string()),
+        reasoning_effort: None,
+    }
 }
 
 /// Settings for notices we display to users via the tui and app-server clients
@@ -1097,17 +1116,21 @@ mod tests {
     }
 
     #[test]
-    fn subagent_presets_default_to_gpt_5_3_codex_with_low_reasoning() {
-        let expected = SubagentPresetConfig {
+    fn subagent_presets_default_to_expected_models_and_reasoning() {
+        let default_preset = SubagentPresetConfig {
             model: Some("gpt-5.3-codex".to_string()),
             reasoning_effort: Some(ReasoningEffort::Low),
         };
+        let websearch_preset = SubagentPresetConfig {
+            model: Some("o4-mini-deep-research".to_string()),
+            reasoning_effort: None,
+        };
         let defaults = SubagentPresetsConfig::default();
 
-        assert_eq!(defaults.edit, expected);
-        assert_eq!(defaults.read, expected);
-        assert_eq!(defaults.grep, expected);
-        assert_eq!(defaults.run, expected);
-        assert_eq!(defaults.websearch, expected);
+        assert_eq!(defaults.edit, default_preset);
+        assert_eq!(defaults.read, default_preset);
+        assert_eq!(defaults.grep, default_preset);
+        assert_eq!(defaults.run, default_preset);
+        assert_eq!(defaults.websearch, websearch_preset);
     }
 }

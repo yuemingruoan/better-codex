@@ -1584,6 +1584,7 @@ async fn apply_spawn_model_overrides(
         SubagentPreset::Run => &turn.config.subagent_presets.run,
         SubagentPreset::Websearch => &turn.config.subagent_presets.websearch,
     });
+    let preset_reasoning_effort = preset_config.and_then(|preset| preset.reasoning_effort);
     if let Some(model) = overrides
         .model
         .as_deref()
@@ -1599,10 +1600,7 @@ async fn apply_spawn_model_overrides(
         config.model = Some(model.to_string());
     }
 
-    if let Some(reasoning_effort) = overrides
-        .reasoning_effort
-        .or_else(|| preset_config.and_then(|preset| preset.reasoning_effort))
-    {
+    if let Some(reasoning_effort) = overrides.reasoning_effort.or(preset_reasoning_effort) {
         config.model_reasoning_effort = Some(reasoning_effort);
     }
     if let Some(reasoning_summary) = overrides.reasoning_summary {
@@ -1613,12 +1611,21 @@ async fn apply_spawn_model_overrides(
         .model
         .clone()
         .unwrap_or_else(|| turn.model_info.slug.clone());
+    let model_info = session
+        .services
+        .models_manager
+        .get_model_info(&model, config)
+        .await;
+
+    if config.model_reasoning_effort.is_some()
+        && overrides.reasoning_effort.is_none()
+        && preset_reasoning_effort.is_none()
+        && model_info.supported_reasoning_levels.is_empty()
+    {
+        config.model_reasoning_effort = None;
+    }
+
     if let Some(reasoning_effort) = config.model_reasoning_effort {
-        let model_info = session
-            .services
-            .models_manager
-            .get_model_info(&model, config)
-            .await;
         if !model_info
             .supported_reasoning_levels
             .iter()
@@ -3944,6 +3951,40 @@ mod tests {
             .await
             .expect("explicit model should override preset model");
         assert_eq!(explicit_config.model, Some(default_model));
+    }
+
+    #[tokio::test]
+    async fn build_agent_spawn_config_websearch_preset_uses_deep_research_without_reasoning() {
+        let (session, turn) = make_session_and_context().await;
+        let overrides = SpawnConfigOverrides {
+            preset: Some(SubagentPreset::Websearch),
+            ..SpawnConfigOverrides::default()
+        };
+
+        let config = build_agent_spawn_config(&session, &turn, &overrides)
+            .await
+            .expect("websearch preset config");
+
+        assert_eq!(config.model, Some("o4-mini-deep-research".to_string()));
+        assert_eq!(config.model_reasoning_effort, None);
+    }
+
+    #[tokio::test]
+    async fn build_agent_spawn_config_websearch_preset_allows_explicit_model_override() {
+        let (session, turn) = make_session_and_context().await;
+        let explicit_model = turn.model_info.slug.clone();
+        let overrides = SpawnConfigOverrides {
+            preset: Some(SubagentPreset::Websearch),
+            model: Some(explicit_model.clone()),
+            ..SpawnConfigOverrides::default()
+        };
+
+        let config = build_agent_spawn_config(&session, &turn, &overrides)
+            .await
+            .expect("explicit model should override websearch preset");
+
+        assert_eq!(config.model, Some(explicit_model));
+        assert_eq!(config.model_reasoning_effort, turn.reasoning_effort);
     }
 
     #[tokio::test]

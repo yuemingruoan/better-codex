@@ -71,7 +71,7 @@ reasoning_effort = "low"
 
 - `model`：可选，覆盖该预设默认模型。
 - `reasoning_effort`：可选，覆盖该预设默认推理强度。
-- 不配置时，5 个内置预设默认统一为 `gpt-5.3-codex + low`。
+- 不配置时，`edit/read/grep/run` 默认是 `gpt-5.3-codex + low`；`websearch` 默认是 `o4-mini-deep-research`（不设置推理强度覆盖）。
 - `/preset` 仅提供“设置模型覆盖 / 设置推理覆盖”两项操作；如需清空覆盖，请直接编辑 `config.toml` 删除对应字段。
 
 ## JSON Schema
