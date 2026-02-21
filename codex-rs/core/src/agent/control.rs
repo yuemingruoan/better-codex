@@ -4,6 +4,8 @@ use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::thread_manager::AgentRegistryRecord;
 use crate::thread_manager::AgentSpawnMetadata;
+use crate::thread_manager::ExpertAgentBudget;
+use crate::thread_manager::ExpertBudgetConsumeResult;
 use crate::thread_manager::ThreadManagerState;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::Op;
@@ -255,6 +257,26 @@ impl AgentControl {
     ) -> CodexResult<AgentRegistryRecord> {
         let state = self.upgrade()?;
         state.rename_agent(agent_id, name).await
+    }
+
+    pub(crate) async fn set_agent_expert_budget(
+        &self,
+        agent_id: ThreadId,
+        expert_budget: Option<ExpertAgentBudget>,
+    ) -> CodexResult<AgentRegistryRecord> {
+        let state = self.upgrade()?;
+        state.set_agent_expert_budget(agent_id, expert_budget).await
+    }
+
+    pub(crate) async fn consume_agent_expert_budget_round(
+        &self,
+        agent_id: ThreadId,
+        sender_thread_id: ThreadId,
+    ) -> CodexResult<ExpertBudgetConsumeResult> {
+        let state = self.upgrade()?;
+        state
+            .consume_agent_expert_budget_round(agent_id, sender_thread_id)
+            .await
     }
 
     async fn shutdown_agent_only(&self, agent_id: ThreadId) -> CodexResult<String> {

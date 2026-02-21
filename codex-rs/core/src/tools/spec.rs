@@ -525,7 +525,16 @@ fn create_spawn_agent_parameters() -> JsonSchema {
         "preset".to_string(),
         JsonSchema::String {
             description: Some(
-                "Optional spawn preset (edit|read|grep|run|websearch) / 可选启动预设（edit|read|grep|run|websearch）"
+                "Optional spawn preset (edit|read|grep|run|websearch|expert) / 可选启动预设（edit|read|grep|run|websearch|expert）"
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "must_call_reason".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Required when preset=expert. Explain why this high-cost expert call is necessary."
                     .to_string(),
             ),
         },
@@ -628,6 +637,15 @@ fn create_send_input_parameters() -> JsonSchema {
             JsonSchema::Boolean {
                 description: Some(
                     "When true, stop the agent's current task and handle this immediately. When false (default), queue this message."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "must_call_reason".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Required when sending to an expert agent after its 3-round budget is exhausted. Explain why another budget window is necessary."
                         .to_string(),
                 ),
             },

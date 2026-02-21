@@ -988,6 +988,27 @@ plan = "plan"
 proxy = "proxy"
 close = "close"
 
+[collab.expert.approval]
+header = "Use Expert Sub-Agent?"
+question = "This action may incur high cost. Approve up to ${rounds} rounds for expert sub-agent usage? Required reason: ${reason}"
+
+[collab.expert.reapproval]
+header = "Expert Budget Exhausted"
+question = "The approved expert budget is exhausted. Approve another ${rounds} rounds? Required reason: ${reason}"
+
+[collab.expert.option]
+approve = "Approve"
+approve_desc = "Allow expert sub-agent usage for this budget window."
+cancel = "Cancel"
+cancel_desc = "Reject this request and keep the current budget unchanged."
+
+[collab.expert.error]
+subagent_spawn_forbidden = "expert preset can only be spawned by the decision/root agent"
+reason_required = "must_call_reason is required when preset=expert"
+reapproval_reason_required = "must_call_reason is required to request a new expert budget window"
+owner_only = "Only the owner thread ${owner_thread_id} can send input to this expert sub-agent."
+approval_declined = "expert usage was not approved by the user"
+
 [command_popup]
 send_saved_prompt = "Send saved prompt"
 

@@ -276,6 +276,67 @@
         "limit": 10000
       },
       "supports_parallel_tool_calls": true,
+      "context_window": 400000,
+      "reasoning_summary_format": "none",
+      "slug": "gpt-5.2-pro",
+      "display_name": "gpt-5.2-pro",
+      "description": "High-cost specialist model for expert-only escalation tasks.",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Balances speed with some reasoning; useful for straightforward queries and short explanations"
+        },
+        {
+          "effort": "medium",
+          "description": "Provides a solid balance of reasoning depth and latency for general-purpose tasks"
+        },
+        {
+          "effort": "high",
+          "description": "Maximizes reasoning depth for complex or ambiguous problems"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Extra high reasoning for complex problems"
+        }
+      ],
+      "shell_type": "shell_command",
+      "visibility": "hide",
+      "minimal_client_version": "0.0.1",
+      "supported_in_api": true,
+      "upgrade": null,
+      "priority": 6,
+      "base_instructions": "You are GPT-5.2 Pro running in the Codex CLI, a terminal-based coding assistant. Codex CLI is an open source project led by OpenAI. You are expected to be precise, safe, and helpful.\\n\\nYour capabilities:\\n\\n- Receive user prompts and other context provided by the harness, such as files in the workspace.\\n- Communicate with the user by streaming thinking & responses, and by making & updating plans.\\n- Emit function calls to run terminal commands and apply patches.",
+      "model_messages": null,
+      "experimental_supported_tools": [],
+      "available_in_plans": [
+        "business",
+        "edu",
+        "education",
+        "enterprise",
+        "finserv",
+        "free",
+        "go",
+        "hc",
+        "plus",
+        "pro",
+        "team"
+      ]
+    },
+    {
+      "supports_reasoning_summaries": true,
+      "support_verbosity": true,
+      "default_verbosity": "low",
+      "apply_patch_tool_type": "freeform",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "truncation_policy": {
+        "mode": "bytes",
+        "limit": 10000
+      },
+      "supports_parallel_tool_calls": true,
       "context_window": 272000,
       "reasoning_summary_format": "none",
       "slug": "gpt-5.2",

@@ -984,6 +984,27 @@ plan = "规划"
 proxy = "转发"
 close = "关闭"
 
+[collab.expert.approval]
+header = "启用 Expert 子 Agent？"
+question = "该操作可能产生高额费用。是否批准 Expert 子 Agent 在本次预算窗口内最多 ${rounds} 轮？必要理由：${reason}"
+
+[collab.expert.reapproval]
+header = "Expert 预算已耗尽"
+question = "已批准的 Expert 预算已耗尽。是否再批准最多 ${rounds} 轮？必要理由：${reason}"
+
+[collab.expert.option]
+approve = "批准"
+approve_desc = "允许在当前预算窗口内调用 Expert 子 Agent。"
+cancel = "取消"
+cancel_desc = "拒绝本次请求，保持当前预算不变。"
+
+[collab.expert.error]
+subagent_spawn_forbidden = "expert 预设仅允许由决策/根 Agent 创建"
+reason_required = "当 preset=expert 时必须提供 must_call_reason"
+reapproval_reason_required = "申请新的 expert 预算窗口时必须提供 must_call_reason"
+owner_only = "仅 owner 线程 ${owner_thread_id} 可向该 expert 子 Agent 发送消息。"
+approval_declined = "用户未批准 expert 调用请求"
+
 [command_popup]
 send_saved_prompt = "发送已保存的提示词"
 

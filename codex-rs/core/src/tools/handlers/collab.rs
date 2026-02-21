@@ -5,10 +5,14 @@ use crate::config::Config;
 use crate::config::types::SubagentPreset;
 use crate::error::CodexErr;
 use crate::function_tool::FunctionCallError;
+use crate::i18n::tr;
+use crate::i18n::tr_args;
 use crate::models_manager::manager::RefreshStrategy;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
 use crate::thread_manager::AgentSpawnMetadata;
+use crate::thread_manager::ExpertAgentBudget;
+use crate::thread_manager::ExpertBudgetConsumeResult;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -33,6 +37,10 @@ use codex_protocol::protocol::CollabWaitingBeginEvent;
 use codex_protocol::protocol::CollabWaitingEndEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::request_user_input::RequestUserInputAnswer;
+use codex_protocol::request_user_input::RequestUserInputArgs;
+use codex_protocol::request_user_input::RequestUserInputQuestion;
+use codex_protocol::request_user_input::RequestUserInputQuestionOption;
 use codex_protocol::user_input::UserInput;
 use serde::Deserialize;
 use serde::Serialize;
@@ -43,7 +51,15 @@ pub struct CollabHandler;
 pub(crate) const MIN_WAIT_TIMEOUT_MS: i64 = 100;
 pub(crate) const DEFAULT_WAIT_TIMEOUT_MS: i64 = crate::config::DEFAULT_COLLAB_WAIT_TIMEOUT_MS;
 pub(crate) const MAX_WAIT_TIMEOUT_MS: i64 = 300_000;
-const ALLOWED_SPAWN_PRESETS: [&str; 5] = ["edit", "read", "grep", "run", "websearch"];
+const ALLOWED_SPAWN_PRESETS: [&str; 6] = ["edit", "read", "grep", "run", "websearch", "expert"];
+const EXPERT_MAX_ROUNDS_PER_WINDOW: u8 = 3;
+const EXPERT_PRESET_MODEL: &str = "gpt-5.2-pro";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SpawnPreset {
+    Builtin(SubagentPreset),
+    Expert,
+}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -61,7 +77,7 @@ struct CloseAgentArgs {
 
 #[derive(Debug, Default)]
 struct SpawnConfigOverrides {
-    preset: Option<SubagentPreset>,
+    preset: Option<SpawnPreset>,
     model: Option<String>,
     reasoning_effort: Option<ReasoningEffort>,
     reasoning_summary: Option<ReasoningSummaryConfig>,
@@ -139,6 +155,7 @@ mod spawn {
         reasoning_summary: Option<ReasoningSummaryConfig>,
         approval_policy: Option<AskForApproval>,
         sandbox_mode: Option<SandboxMode>,
+        must_call_reason: Option<String>,
     }
 
     #[derive(Debug, Serialize)]
@@ -160,6 +177,22 @@ mod spawn {
             ));
         }
         let preset = parse_spawn_preset(args.preset.as_deref())?;
+        if matches!(preset, Some(SpawnPreset::Expert)) {
+            enforce_expert_spawn_caller(turn.as_ref())?;
+            let reason = parse_required_expert_reason(
+                turn.config.language,
+                args.must_call_reason.as_deref(),
+                false,
+            )?;
+            request_expert_budget_approval(
+                session.as_ref(),
+                turn.as_ref(),
+                &call_id,
+                reason,
+                false,
+            )
+            .await?;
+        }
         let agent_role = args.agent_type.unwrap_or(AgentRole::Default);
         let input_items = parse_collab_input(args.items)?;
         let prompt = input_preview(&input_items);
@@ -204,6 +237,13 @@ mod spawn {
             acceptance_criteria: args.acceptance_criteria.unwrap_or_default(),
             test_commands: args.test_commands.unwrap_or_default(),
             allow_nested_agents: args.allow_nested_agents.unwrap_or(false),
+            expert_budget: matches!(preset, Some(SpawnPreset::Expert)).then_some(
+                ExpertAgentBudget {
+                    owner_thread_id: session.conversation_id,
+                    remaining_rounds: EXPERT_MAX_ROUNDS_PER_WINDOW.saturating_sub(1),
+                    max_rounds: EXPERT_MAX_ROUNDS_PER_WINDOW,
+                },
+            ),
         };
         agent_role
             .apply_to_config(&mut config)
@@ -265,6 +305,7 @@ mod send_input {
         items: Option<Vec<UserInput>>,
         #[serde(default)]
         interrupt: bool,
+        must_call_reason: Option<String>,
     }
 
     #[derive(Debug, Serialize)]
@@ -282,6 +323,14 @@ mod send_input {
         let receiver_thread_id = agent_id(&args.agent_id)?;
         let input_items = parse_collab_input(args.items)?;
         let prompt = input_preview(&input_items);
+        maybe_consume_expert_budget_for_send(
+            session.as_ref(),
+            turn.as_ref(),
+            receiver_thread_id,
+            args.must_call_reason.as_deref(),
+            &call_id,
+        )
+        .await?;
         if args.interrupt {
             session
                 .services
@@ -1551,16 +1600,17 @@ fn input_preview(items: &[UserInput]) -> String {
     parts.join("\n")
 }
 
-fn parse_spawn_preset(preset: Option<&str>) -> Result<Option<SubagentPreset>, FunctionCallError> {
+fn parse_spawn_preset(preset: Option<&str>) -> Result<Option<SpawnPreset>, FunctionCallError> {
     let Some(preset) = preset.map(str::trim).filter(|preset| !preset.is_empty()) else {
         return Ok(None);
     };
     let parsed = match preset {
-        "edit" => SubagentPreset::Edit,
-        "read" => SubagentPreset::Read,
-        "grep" => SubagentPreset::Grep,
-        "run" => SubagentPreset::Run,
-        "websearch" => SubagentPreset::Websearch,
+        "edit" => SpawnPreset::Builtin(SubagentPreset::Edit),
+        "read" => SpawnPreset::Builtin(SubagentPreset::Read),
+        "grep" => SpawnPreset::Builtin(SubagentPreset::Grep),
+        "run" => SpawnPreset::Builtin(SubagentPreset::Run),
+        "websearch" => SpawnPreset::Builtin(SubagentPreset::Websearch),
+        "expert" => SpawnPreset::Expert,
         _ => {
             let allowed = ALLOWED_SPAWN_PRESETS.join("|");
             return Err(FunctionCallError::RespondToModel(format!(
@@ -1571,24 +1621,179 @@ fn parse_spawn_preset(preset: Option<&str>) -> Result<Option<SubagentPreset>, Fu
     Ok(Some(parsed))
 }
 
+fn enforce_expert_spawn_caller(turn: &TurnContext) -> Result<(), FunctionCallError> {
+    if matches!(turn.session_source, SessionSource::SubAgent(_)) {
+        return Err(FunctionCallError::RespondToModel(
+            tr(
+                turn.config.language,
+                "collab.expert.error.subagent_spawn_forbidden",
+            )
+            .to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn parse_required_expert_reason<'a>(
+    language: codex_protocol::config_types::Language,
+    reason: Option<&'a str>,
+    reapproval: bool,
+) -> Result<&'a str, FunctionCallError> {
+    let Some(reason) = reason.map(str::trim).filter(|reason| !reason.is_empty()) else {
+        let key = if reapproval {
+            "collab.expert.error.reapproval_reason_required"
+        } else {
+            "collab.expert.error.reason_required"
+        };
+        return Err(FunctionCallError::RespondToModel(
+            tr(language, key).to_string(),
+        ));
+    };
+    Ok(reason)
+}
+
+async fn maybe_consume_expert_budget_for_send(
+    session: &Session,
+    turn: &TurnContext,
+    receiver_thread_id: ThreadId,
+    must_call_reason: Option<&str>,
+    call_id: &str,
+) -> Result<(), FunctionCallError> {
+    let consume_result = session
+        .services
+        .agent_control
+        .consume_agent_expert_budget_round(receiver_thread_id, session.conversation_id)
+        .await
+        .map_err(|err| collab_agent_error(receiver_thread_id, err))?;
+    match consume_result {
+        ExpertBudgetConsumeResult::NotExpert | ExpertBudgetConsumeResult::Consumed(_) => Ok(()),
+        ExpertBudgetConsumeResult::ForbiddenOwner { owner_thread_id } => Err({
+            let owner_thread_id = owner_thread_id.to_string();
+            FunctionCallError::RespondToModel(tr_args(
+                turn.config.language,
+                "collab.expert.error.owner_only",
+                &[("owner_thread_id", owner_thread_id.as_str())],
+            ))
+        }),
+        ExpertBudgetConsumeResult::Exhausted(budget) => {
+            let reason =
+                parse_required_expert_reason(turn.config.language, must_call_reason, true)?;
+            request_expert_budget_approval(session, turn, call_id, reason, true).await?;
+            session
+                .services
+                .agent_control
+                .set_agent_expert_budget(
+                    receiver_thread_id,
+                    Some(ExpertAgentBudget {
+                        owner_thread_id: budget.owner_thread_id,
+                        remaining_rounds: budget.max_rounds.saturating_sub(1),
+                        max_rounds: budget.max_rounds,
+                    }),
+                )
+                .await
+                .map_err(|err| collab_agent_error(receiver_thread_id, err))?;
+            Ok(())
+        }
+    }
+}
+
+async fn request_expert_budget_approval(
+    session: &Session,
+    turn: &TurnContext,
+    call_id: &str,
+    reason: &str,
+    reapproval: bool,
+) -> Result<(), FunctionCallError> {
+    let language = turn.config.language;
+    let rounds = EXPERT_MAX_ROUNDS_PER_WINDOW.to_string();
+    let question_id = if reapproval {
+        "expert_reapproval".to_string()
+    } else {
+        "expert_approval".to_string()
+    };
+    let header_key = if reapproval {
+        "collab.expert.reapproval.header"
+    } else {
+        "collab.expert.approval.header"
+    };
+    let question_key = if reapproval {
+        "collab.expert.reapproval.question"
+    } else {
+        "collab.expert.approval.question"
+    };
+    let approve_label = tr(language, "collab.expert.option.approve").to_string();
+    let cancel_label = tr(language, "collab.expert.option.cancel").to_string();
+    let args = RequestUserInputArgs {
+        questions: vec![RequestUserInputQuestion {
+            id: question_id.clone(),
+            header: tr(language, header_key).to_string(),
+            question: tr_args(
+                language,
+                question_key,
+                &[("reason", reason), ("rounds", rounds.as_str())],
+            ),
+            is_other: false,
+            is_secret: false,
+            options: Some(vec![
+                RequestUserInputQuestionOption {
+                    label: approve_label.clone(),
+                    description: tr(language, "collab.expert.option.approve_desc").to_string(),
+                },
+                RequestUserInputQuestionOption {
+                    label: cancel_label.clone(),
+                    description: tr(language, "collab.expert.option.cancel_desc").to_string(),
+                },
+            ]),
+        }],
+    };
+    let response = session
+        .request_user_input(turn, call_id.to_string(), args)
+        .await
+        .ok_or_else(|| {
+            FunctionCallError::RespondToModel(
+                tr(language, "collab.expert.error.approval_declined").to_string(),
+            )
+        })?;
+    let approved =
+        response
+            .answers
+            .get(&question_id)
+            .is_some_and(|RequestUserInputAnswer { answers }| {
+                answers.iter().any(|answer| answer == &approve_label)
+            });
+    if approved {
+        Ok(())
+    } else {
+        Err(FunctionCallError::RespondToModel(
+            tr(language, "collab.expert.error.approval_declined").to_string(),
+        ))
+    }
+}
+
 async fn apply_spawn_model_overrides(
     session: &Session,
     turn: &TurnContext,
     config: &mut Config,
     overrides: &SpawnConfigOverrides,
 ) -> Result<(), FunctionCallError> {
-    let preset_config = overrides.preset.map(|preset| match preset {
-        SubagentPreset::Edit => &turn.config.subagent_presets.edit,
-        SubagentPreset::Read => &turn.config.subagent_presets.read,
-        SubagentPreset::Grep => &turn.config.subagent_presets.grep,
-        SubagentPreset::Run => &turn.config.subagent_presets.run,
-        SubagentPreset::Websearch => &turn.config.subagent_presets.websearch,
+    let preset_config = overrides.preset.and_then(|preset| match preset {
+        SpawnPreset::Builtin(SubagentPreset::Edit) => Some(&turn.config.subagent_presets.edit),
+        SpawnPreset::Builtin(SubagentPreset::Read) => Some(&turn.config.subagent_presets.read),
+        SpawnPreset::Builtin(SubagentPreset::Grep) => Some(&turn.config.subagent_presets.grep),
+        SpawnPreset::Builtin(SubagentPreset::Run) => Some(&turn.config.subagent_presets.run),
+        SpawnPreset::Builtin(SubagentPreset::Websearch) => {
+            Some(&turn.config.subagent_presets.websearch)
+        }
+        SpawnPreset::Expert => None,
     });
     let preset_reasoning_effort = preset_config.and_then(|preset| preset.reasoning_effort);
+    let expert_preset_model =
+        matches!(overrides.preset, Some(SpawnPreset::Expert)).then_some(EXPERT_PRESET_MODEL);
     if let Some(model) = overrides
         .model
         .as_deref()
         .or_else(|| preset_config.and_then(|preset| preset.model.as_deref()))
+        .or(expert_preset_model)
     {
         let model = model.trim();
         if model.is_empty() {
@@ -1766,6 +1971,7 @@ mod tests {
     use crate::protocol::AskForApproval;
     use crate::protocol::Op;
     use crate::protocol::SandboxPolicy;
+    use crate::state::ActiveTurn;
     use crate::turn_diff_tracker::TurnDiffTracker;
     use codex_protocol::ThreadId;
     use codex_protocol::models::ContentItem;
@@ -1773,7 +1979,10 @@ mod tests {
     use codex_protocol::protocol::Event;
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::InitialHistory;
+    use codex_protocol::protocol::RequestUserInputEvent;
     use codex_protocol::protocol::RolloutItem;
+    use codex_protocol::request_user_input::RequestUserInputAnswer;
+    use codex_protocol::request_user_input::RequestUserInputResponse;
     use pretty_assertions::assert_eq;
     use serde::Deserialize;
     use serde_json::json;
@@ -1827,6 +2036,20 @@ mod tests {
                 .expect("event channel should stay open");
             if let EventMsg::CollabCloseEnd(event) = event.msg {
                 return event.status;
+            }
+        }
+    }
+
+    async fn recv_request_user_input_event(
+        rx: &async_channel::Receiver<Event>,
+    ) -> RequestUserInputEvent {
+        loop {
+            let event = timeout(Duration::from_secs(1), rx.recv())
+                .await
+                .expect("request_user_input event should arrive")
+                .expect("event channel should stay open");
+            if let EventMsg::RequestUserInput(event) = event.msg {
+                return event;
             }
         }
     }
@@ -1991,9 +2214,258 @@ mod tests {
         assert_eq!(
             err,
             FunctionCallError::RespondToModel(
-                "unsupported preset `not-a-real-preset`; expected one of edit|read|grep|run|websearch / 不支持的 preset `not-a-real-preset`，可选值：edit|read|grep|run|websearch".to_string()
+                "unsupported preset `not-a-real-preset`; expected one of edit|read|grep|run|websearch|expert / 不支持的 preset `not-a-real-preset`，可选值：edit|read|grep|run|websearch|expert".to_string()
             )
         );
+    }
+
+    #[tokio::test]
+    async fn spawn_agent_expert_rejects_subagent_caller() {
+        let (session, mut turn) = make_session_and_context().await;
+        turn.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id: ThreadId::new(),
+            depth: 1,
+        });
+        let expected_message = tr(
+            turn.config.language,
+            "collab.expert.error.subagent_spawn_forbidden",
+        )
+        .to_string();
+        let invocation = invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "items": [{"type": "text", "text": "hard task"}],
+                "preset": "expert",
+                "must_call_reason": "Need specialist support",
+            })),
+        );
+        let Err(err) = CollabHandler.handle(invocation).await else {
+            panic!("expert spawn should reject sub-agent callers");
+        };
+        assert_eq!(err, FunctionCallError::RespondToModel(expected_message));
+    }
+
+    #[tokio::test]
+    async fn spawn_agent_expert_requires_must_call_reason() {
+        let (session, turn) = make_session_and_context().await;
+        let expected_message =
+            tr(turn.config.language, "collab.expert.error.reason_required").to_string();
+        let invocation = invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "items": [{"type": "text", "text": "hard task"}],
+                "preset": "expert"
+            })),
+        );
+        let Err(err) = CollabHandler.handle(invocation).await else {
+            panic!("expert spawn should require must_call_reason");
+        };
+        assert_eq!(err, FunctionCallError::RespondToModel(expected_message));
+    }
+
+    #[tokio::test]
+    async fn expert_budget_requires_reapproval_after_three_rounds() {
+        let (mut session, turn, rx) = make_session_and_context_with_rx().await;
+        let manager = thread_manager();
+        Arc::get_mut(&mut session)
+            .expect("session should not be shared")
+            .services
+            .agent_control = manager.agent_control();
+        *session.active_turn.lock().await = Some(ActiveTurn::default());
+        let approve_label = tr(turn.config.language, "collab.expert.option.approve").to_string();
+
+        let spawn_invocation = invocation(
+            session.clone(),
+            turn.clone(),
+            "spawn_agent",
+            function_payload(json!({
+                "items": [{"type": "text", "text": "solve this hard algorithm"}],
+                "preset": "expert",
+                "must_call_reason": "Need advanced algorithm analysis",
+            })),
+        );
+        let spawn_task = tokio::spawn(async move { CollabHandler.handle(spawn_invocation).await });
+        let spawn_approval = recv_request_user_input_event(&rx).await;
+        let spawn_question = spawn_approval
+            .questions
+            .first()
+            .expect("expert spawn approval question");
+        assert_eq!(spawn_question.id, "expert_approval");
+        assert!(
+            spawn_question
+                .question
+                .contains("Need advanced algorithm analysis")
+        );
+        assert!(spawn_question.question.contains("3"));
+        session
+            .notify_user_input_response(
+                &turn.sub_id,
+                RequestUserInputResponse {
+                    answers: HashMap::from([(
+                        "expert_approval".to_string(),
+                        RequestUserInputAnswer {
+                            answers: vec![approve_label.clone()],
+                        },
+                    )]),
+                },
+            )
+            .await;
+
+        let spawn_output = spawn_task
+            .await
+            .expect("spawn task should join")
+            .expect("expert spawn should succeed after approval");
+        let ToolOutput::Function {
+            body: FunctionCallOutputBody::Text(spawn_content),
+            success: spawn_success,
+            ..
+        } = spawn_output
+        else {
+            panic!("expected function output");
+        };
+        assert_eq!(spawn_success, Some(true));
+        let spawn_value: serde_json::Value =
+            serde_json::from_str(&spawn_content).expect("spawn result json");
+        let expert_agent_id = spawn_value
+            .get("agent_id")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|id| ThreadId::from_string(id).ok())
+            .expect("expert agent id should be present");
+        let record = manager
+            .agent_control()
+            .get_agent_record(expert_agent_id)
+            .await
+            .expect("load expert record")
+            .expect("expert record should exist");
+        let budget = record.expert_budget.expect("expert budget should be set");
+        assert_eq!(budget.owner_thread_id, session.conversation_id);
+        assert_eq!(budget.max_rounds, EXPERT_MAX_ROUNDS_PER_WINDOW);
+        assert_eq!(
+            budget.remaining_rounds,
+            EXPERT_MAX_ROUNDS_PER_WINDOW.saturating_sub(1)
+        );
+
+        for expected_remaining in [1, 0] {
+            let send_invocation = invocation(
+                session.clone(),
+                turn.clone(),
+                "send_input",
+                function_payload(json!({
+                    "agent_id": expert_agent_id.to_string(),
+                    "items": [{"type": "text", "text": "continue"}],
+                })),
+            );
+            let send_output = CollabHandler
+                .handle(send_invocation)
+                .await
+                .expect("send_input should succeed within budget");
+            let ToolOutput::Function {
+                success: send_success,
+                ..
+            } = send_output
+            else {
+                panic!("expected function output");
+            };
+            assert_eq!(send_success, Some(true));
+            let record = manager
+                .agent_control()
+                .get_agent_record(expert_agent_id)
+                .await
+                .expect("load expert record")
+                .expect("expert record should exist");
+            let budget = record.expert_budget.expect("expert budget should remain");
+            assert_eq!(budget.remaining_rounds, expected_remaining);
+        }
+
+        let exhausted_without_reason = invocation(
+            session.clone(),
+            turn.clone(),
+            "send_input",
+            function_payload(json!({
+                "agent_id": expert_agent_id.to_string(),
+                "items": [{"type": "text", "text": "another try"}],
+            })),
+        );
+        let Err(err) = CollabHandler.handle(exhausted_without_reason).await else {
+            panic!("send_input should require reason when reapproving");
+        };
+        let expected_reapproval_required = tr(
+            turn.config.language,
+            "collab.expert.error.reapproval_reason_required",
+        )
+        .to_string();
+        assert_eq!(
+            err,
+            FunctionCallError::RespondToModel(expected_reapproval_required)
+        );
+
+        let reapproval_invocation = invocation(
+            session.clone(),
+            turn.clone(),
+            "send_input",
+            function_payload(json!({
+                "agent_id": expert_agent_id.to_string(),
+                "items": [{"type": "text", "text": "another try"}],
+                "must_call_reason": "Need one more expert pass",
+            })),
+        );
+        let reapproval_task =
+            tokio::spawn(async move { CollabHandler.handle(reapproval_invocation).await });
+        let reapproval = recv_request_user_input_event(&rx).await;
+        let reapproval_question = reapproval
+            .questions
+            .first()
+            .expect("expert reapproval question");
+        assert_eq!(reapproval_question.id, "expert_reapproval");
+        assert!(
+            reapproval_question
+                .question
+                .contains("Need one more expert pass")
+        );
+        assert!(reapproval_question.question.contains("3"));
+        session
+            .notify_user_input_response(
+                &turn.sub_id,
+                RequestUserInputResponse {
+                    answers: HashMap::from([(
+                        "expert_reapproval".to_string(),
+                        RequestUserInputAnswer {
+                            answers: vec![approve_label],
+                        },
+                    )]),
+                },
+            )
+            .await;
+        let reapproval_output = reapproval_task
+            .await
+            .expect("send task should join")
+            .expect("send_input should succeed after reapproval");
+        let ToolOutput::Function {
+            success: reapproval_success,
+            ..
+        } = reapproval_output
+        else {
+            panic!("expected function output");
+        };
+        assert_eq!(reapproval_success, Some(true));
+
+        let record = manager
+            .agent_control()
+            .get_agent_record(expert_agent_id)
+            .await
+            .expect("load expert record")
+            .expect("expert record should exist");
+        let budget = record.expert_budget.expect("expert budget should remain");
+        assert_eq!(budget.remaining_rounds, EXPERT_MAX_ROUNDS_PER_WINDOW - 1);
+
+        let _ = manager
+            .agent_control()
+            .shutdown_agent(expert_agent_id)
+            .await;
     }
 
     #[tokio::test]
@@ -2297,6 +2769,7 @@ mod tests {
             acceptance_criteria: vec!["all tests pass".to_string()],
             test_commands: vec!["cargo test -p codex-core".to_string()],
             allow_nested_agents: false,
+            expert_budget: None,
         };
         let agent_id = control
             .spawn_agent_with_metadata(config, "do work".to_string(), metadata)
@@ -2645,6 +3118,57 @@ mod tests {
             err,
             FunctionCallError::RespondToModel(format!("agent with id {agent_id} not found"))
         );
+    }
+
+    #[tokio::test]
+    async fn send_input_rejects_expert_forward_from_non_owner_thread() {
+        let (mut owner_session, owner_turn) = make_session_and_context().await;
+        let manager = thread_manager();
+        let control = manager.agent_control();
+        owner_session.services.agent_control = control.clone();
+        let owner_thread_id = owner_session.conversation_id;
+        let config = owner_turn.config.as_ref().clone();
+        let expert_agent_id = control
+            .spawn_agent_with_metadata(
+                config,
+                "expert worker".to_string(),
+                AgentSpawnMetadata {
+                    creator_thread_id: Some(owner_thread_id),
+                    expert_budget: Some(ExpertAgentBudget {
+                        owner_thread_id,
+                        remaining_rounds: 2,
+                        max_rounds: 3,
+                    }),
+                    ..AgentSpawnMetadata::default()
+                },
+            )
+            .await
+            .expect("spawn expert worker");
+
+        let (mut other_session, other_turn) = make_session_and_context().await;
+        other_session.services.agent_control = control.clone();
+        other_session.conversation_id = ThreadId::new();
+        let owner_thread_id_str = owner_thread_id.to_string();
+        let expected_message = tr_args(
+            other_turn.config.language,
+            "collab.expert.error.owner_only",
+            &[("owner_thread_id", owner_thread_id_str.as_str())],
+        );
+        let invocation = invocation(
+            Arc::new(other_session),
+            Arc::new(other_turn),
+            "send_input",
+            function_payload(json!({
+                "agent_id": expert_agent_id.to_string(),
+                "items": [{"type": "text", "text": "continue"}],
+            })),
+        );
+        let Err(err) = CollabHandler.handle(invocation).await else {
+            panic!("non-owner should not send input to expert agent");
+        };
+        assert_eq!(err, FunctionCallError::RespondToModel(expected_message));
+
+        let _ = control.shutdown_agent(expert_agent_id).await;
     }
 
     #[tokio::test]
@@ -3931,7 +4455,7 @@ mod tests {
             config.subagent_presets.edit.model = Some(preset_model.clone());
         });
         let preset_only_overrides = SpawnConfigOverrides {
-            preset: Some(SubagentPreset::Edit),
+            preset: Some(SpawnPreset::Builtin(SubagentPreset::Edit)),
             ..SpawnConfigOverrides::default()
         };
         let preset_only_config = build_agent_spawn_config(&session, &turn, &preset_only_overrides)
@@ -3943,7 +4467,7 @@ mod tests {
             config.subagent_presets.edit.model = Some("not-a-real-model".to_string());
         });
         let explicit_overrides = SpawnConfigOverrides {
-            preset: Some(SubagentPreset::Edit),
+            preset: Some(SpawnPreset::Builtin(SubagentPreset::Edit)),
             model: Some(default_model.clone()),
             ..SpawnConfigOverrides::default()
         };
@@ -3957,7 +4481,7 @@ mod tests {
     async fn build_agent_spawn_config_websearch_preset_uses_deep_research_without_reasoning() {
         let (session, turn) = make_session_and_context().await;
         let overrides = SpawnConfigOverrides {
-            preset: Some(SubagentPreset::Websearch),
+            preset: Some(SpawnPreset::Builtin(SubagentPreset::Websearch)),
             ..SpawnConfigOverrides::default()
         };
 
@@ -3974,7 +4498,7 @@ mod tests {
         let (session, turn) = make_session_and_context().await;
         let explicit_model = turn.model_info.slug.clone();
         let overrides = SpawnConfigOverrides {
-            preset: Some(SubagentPreset::Websearch),
+            preset: Some(SpawnPreset::Builtin(SubagentPreset::Websearch)),
             model: Some(explicit_model.clone()),
             ..SpawnConfigOverrides::default()
         };
@@ -3985,6 +4509,27 @@ mod tests {
 
         assert_eq!(config.model, Some(explicit_model));
         assert_eq!(config.model_reasoning_effort, turn.reasoning_effort);
+    }
+
+    #[tokio::test]
+    async fn build_agent_spawn_config_expert_preset_uses_default_expert_model() {
+        let (session, turn) = make_session_and_context().await;
+        let overrides = SpawnConfigOverrides {
+            preset: Some(SpawnPreset::Expert),
+            ..SpawnConfigOverrides::default()
+        };
+
+        let config = build_agent_spawn_config(&session, &turn, &overrides)
+            .await
+            .expect("expert preset config");
+        assert_eq!(config.model, Some(EXPERT_PRESET_MODEL.to_string()));
+
+        let model_info = session
+            .services
+            .models_manager
+            .get_model_info(EXPERT_PRESET_MODEL, &config)
+            .await;
+        assert_eq!(model_info.context_window, Some(400_000));
     }
 
     #[tokio::test]
@@ -4024,7 +4569,7 @@ mod tests {
             config.subagent_presets.edit.reasoning_effort = Some(supported_effort);
         });
         let preset_only_overrides = SpawnConfigOverrides {
-            preset: Some(SubagentPreset::Edit),
+            preset: Some(SpawnPreset::Builtin(SubagentPreset::Edit)),
             ..SpawnConfigOverrides::default()
         };
         let preset_only_config = build_agent_spawn_config(&session, &turn, &preset_only_overrides)
@@ -4039,7 +4584,7 @@ mod tests {
             config.subagent_presets.edit.reasoning_effort = Some(unsupported_effort);
         });
         let explicit_overrides = SpawnConfigOverrides {
-            preset: Some(SubagentPreset::Edit),
+            preset: Some(SpawnPreset::Builtin(SubagentPreset::Edit)),
             reasoning_effort: Some(supported_effort),
             ..SpawnConfigOverrides::default()
         };
