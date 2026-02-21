@@ -611,10 +611,7 @@ pub struct SubagentPresetConfig {
 
 impl Default for SubagentPresetConfig {
     fn default() -> Self {
-        Self {
-            model: Some("gpt-5.3-codex".to_string()),
-            reasoning_effort: Some(ReasoningEffort::Low),
-        }
+        default_edit_subagent_preset()
     }
 }
 
@@ -622,13 +619,13 @@ impl Default for SubagentPresetConfig {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct SubagentPresetsConfig {
-    #[serde(default)]
+    #[serde(default = "default_edit_subagent_preset")]
     pub edit: SubagentPresetConfig,
-    #[serde(default)]
+    #[serde(default = "default_read_subagent_preset")]
     pub read: SubagentPresetConfig,
-    #[serde(default)]
+    #[serde(default = "default_grep_subagent_preset")]
     pub grep: SubagentPresetConfig,
-    #[serde(default)]
+    #[serde(default = "default_run_subagent_preset")]
     pub run: SubagentPresetConfig,
     #[serde(default = "default_websearch_subagent_preset")]
     pub websearch: SubagentPresetConfig,
@@ -637,12 +634,40 @@ pub struct SubagentPresetsConfig {
 impl Default for SubagentPresetsConfig {
     fn default() -> Self {
         Self {
-            edit: SubagentPresetConfig::default(),
-            read: SubagentPresetConfig::default(),
-            grep: SubagentPresetConfig::default(),
-            run: SubagentPresetConfig::default(),
+            edit: default_edit_subagent_preset(),
+            read: default_read_subagent_preset(),
+            grep: default_grep_subagent_preset(),
+            run: default_run_subagent_preset(),
             websearch: default_websearch_subagent_preset(),
         }
+    }
+}
+
+fn default_edit_subagent_preset() -> SubagentPresetConfig {
+    SubagentPresetConfig {
+        model: Some("gpt-5.3-codex".to_string()),
+        reasoning_effort: Some(ReasoningEffort::XHigh),
+    }
+}
+
+fn default_read_subagent_preset() -> SubagentPresetConfig {
+    SubagentPresetConfig {
+        model: Some("gpt-5.2".to_string()),
+        reasoning_effort: Some(ReasoningEffort::Low),
+    }
+}
+
+fn default_grep_subagent_preset() -> SubagentPresetConfig {
+    SubagentPresetConfig {
+        model: Some("gpt-5.3-codex".to_string()),
+        reasoning_effort: Some(ReasoningEffort::Medium),
+    }
+}
+
+fn default_run_subagent_preset() -> SubagentPresetConfig {
+    SubagentPresetConfig {
+        model: Some("gpt-5.2".to_string()),
+        reasoning_effort: Some(ReasoningEffort::Medium),
     }
 }
 
@@ -1117,9 +1142,21 @@ mod tests {
 
     #[test]
     fn subagent_presets_default_to_expected_models_and_reasoning() {
-        let default_preset = SubagentPresetConfig {
+        let edit_preset = SubagentPresetConfig {
             model: Some("gpt-5.3-codex".to_string()),
+            reasoning_effort: Some(ReasoningEffort::XHigh),
+        };
+        let read_preset = SubagentPresetConfig {
+            model: Some("gpt-5.2".to_string()),
             reasoning_effort: Some(ReasoningEffort::Low),
+        };
+        let grep_preset = SubagentPresetConfig {
+            model: Some("gpt-5.3-codex".to_string()),
+            reasoning_effort: Some(ReasoningEffort::Medium),
+        };
+        let run_preset = SubagentPresetConfig {
+            model: Some("gpt-5.2".to_string()),
+            reasoning_effort: Some(ReasoningEffort::Medium),
         };
         let websearch_preset = SubagentPresetConfig {
             model: Some("o4-mini-deep-research".to_string()),
@@ -1127,10 +1164,10 @@ mod tests {
         };
         let defaults = SubagentPresetsConfig::default();
 
-        assert_eq!(defaults.edit, default_preset);
-        assert_eq!(defaults.read, default_preset);
-        assert_eq!(defaults.grep, default_preset);
-        assert_eq!(defaults.run, default_preset);
+        assert_eq!(defaults.edit, edit_preset);
+        assert_eq!(defaults.read, read_preset);
+        assert_eq!(defaults.grep, grep_preset);
+        assert_eq!(defaults.run, run_preset);
         assert_eq!(defaults.websearch, websearch_preset);
     }
 }
