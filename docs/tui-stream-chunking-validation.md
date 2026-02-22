@@ -13,7 +13,7 @@
 
 分块观测由以下 trace 输出：
 
-- `codex_tui::streaming::commit_tick`
+- `codex_tui2::streaming::commit_tick`
 
 使用两条 trace 消息：
 
@@ -25,7 +25,7 @@
 启用 chunking trace 运行 Codex：
 
 ```bash
-RUST_LOG='codex_tui::streaming::commit_tick=trace,codex_tui=info,codex_core=info,codex_rmcp_client=info' \
+RUST_LOG='codex_tui2::streaming::commit_tick=trace,codex_tui2=info,codex_core=info,codex_rmcp_client=info' \
   just codex --enable=responses_websockets
 ```
 

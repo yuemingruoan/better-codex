@@ -128,22 +128,6 @@ pub enum ExitReason {
     Fatal(String),
 }
 
-impl From<AppExitInfo> for codex_tui::AppExitInfo {
-    fn from(info: AppExitInfo) -> Self {
-        let exit_reason = match info.exit_reason {
-            ExitReason::UserRequested => codex_tui::ExitReason::UserRequested,
-            ExitReason::Fatal(message) => codex_tui::ExitReason::Fatal(message),
-        };
-        codex_tui::AppExitInfo {
-            token_usage: info.token_usage,
-            thread_id: info.conversation_id,
-            thread_name: None,
-            update_action: info.update_action.map(Into::into),
-            exit_reason,
-        }
-    }
-}
-
 fn session_summary(
     token_usage: TokenUsage,
     conversation_id: Option<ThreadId>,

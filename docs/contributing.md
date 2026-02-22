@@ -54,7 +54,7 @@
 
 - 填写 PR 模板（或提供类似信息）：**What? Why? How?**
 - 关联 issue 链接或增强请求。
-- 本地运行 **所有** 检查。使用仓库根目录 `just` 辅助命令保持一致：`just fmt`、`just fix -p <crate>`（针对你修改的 crate），以及相关测试（例如 `cargo test -p codex-tui` 或需要全量时 `just test`）。本可本地发现的 CI 失败会拖慢整体流程。
+- 本地运行 **所有** 检查。使用仓库根目录 `just` 辅助命令保持一致：`just fmt`、`just fix -p <crate>`（针对你修改的 crate），以及相关测试（例如 `cargo test -p codex-tui2` 或需要全量时 `just test`）。本可本地发现的 CI 失败会拖慢整体流程。
 - 确保分支已与 `main` 同步并解决合并冲突。
 - 仅在你认为可合并时将 PR 标记为 **Ready for review**。
 

@@ -5,16 +5,6 @@ pub enum UpdateAction {
     OpenReleasePage,
 }
 
-impl From<UpdateAction> for codex_tui::update_action::UpdateAction {
-    fn from(action: UpdateAction) -> Self {
-        match action {
-            UpdateAction::OpenReleasePage => {
-                codex_tui::update_action::UpdateAction::OpenReleasePage
-            }
-        }
-    }
-}
-
 impl UpdateAction {
     pub const RELEASE_PAGE_URL: &'static str =
         "https://github.com/yuemingruoan/better-codex/releases";
