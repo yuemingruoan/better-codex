@@ -408,6 +408,16 @@ select_option = "选择一个选项以添加备注"
 label = "以上都不是"
 description = "可选：在备注中补充细节（Tab）。"
 
+[request_user_input.banner]
+action_required = "需要确认"
+high_impact = "高影响确认"
+action_required_hint = "请确认问题并作答后继续。"
+high_impact_hint = "此操作可能产生较高消耗，请谨慎确认。"
+
+[request_user_input.section]
+options = "选项"
+notes = "备注"
+
 [request_user_input.confirm_unanswered]
 title = "仍有未回答的问题，继续提交？"
 subtitle = "还有 ${count} 个未回答问题"
@@ -423,6 +433,7 @@ tab_add_notes = "按 Tab 添加备注"
 tab_or_esc_clear_notes = "按 Tab 或 Esc 清空备注"
 enter_submit_answer = "按 Enter 提交答案"
 enter_submit_all = "按 Enter 提交全部"
+up_down_select = "按 ↑/↓ 选择"
 ctrl_n_first_question = "Ctrl + n 回到第一题"
 ctrl_n_next_question = "Ctrl + n 下一题"
 esc_interrupt = "Esc 中断"
@@ -997,12 +1008,12 @@ proxy = "转发"
 close = "关闭"
 
 [collab.expert.approval]
-header = "启用 Expert 子 Agent？"
-question = "该操作可能产生高额费用。是否批准 Expert 子 Agent 在本次预算窗口内最多 ${rounds} 轮？必要理由：${reason}"
+header = "申请调用专家模型？"
+question = "当前开发流程中遇到了一些难题，申请调用专家模型。专家模型可以解决普通模型难以解决的问题，但可能造成较高花费。是否批准本次预算窗口内最多 ${rounds} 轮调用？必要理由：${reason}"
 
 [collab.expert.reapproval]
-header = "Expert 预算已耗尽"
-question = "已批准的 Expert 预算已耗尽。是否再批准最多 ${rounds} 轮？必要理由：${reason}"
+header = "申请继续调用专家模型？"
+question = "当前开发流程仍有难题，且已批准的专家预算已耗尽。专家模型可以继续解决普通模型难以解决的问题，但可能造成较高花费。是否再批准最多 ${rounds} 轮调用？必要理由：${reason}"
 
 [collab.expert.option]
 approve = "批准"

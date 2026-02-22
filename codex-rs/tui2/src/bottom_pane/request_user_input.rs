@@ -6,7 +6,6 @@ use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::bottom_pane_view::BottomPaneView;
 use crate::bottom_pane::popup_consts::MAX_POPUP_ROWS;
-use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::bottom_pane::scroll_state::ScrollState;
 use crate::bottom_pane::selection_popup_common::GenericDisplayRow;
 use crate::bottom_pane::selection_popup_common::measure_rows_height;
@@ -58,6 +57,25 @@ pub(crate) struct RequestUserInputOverlay {
     done: bool,
     language: Language,
 }
+
+const HIGH_IMPACT_KEYWORDS: &[&str] = &[
+    "high cost",
+    "high-cost",
+    "expensive",
+    "costly",
+    "billing",
+    "budget",
+    "expert",
+    "pro model",
+    "高成本",
+    "高花费",
+    "昂贵",
+    "费用",
+    "预算",
+    "专家",
+    "专家模型",
+    "pro模型",
+];
 
 impl RequestUserInputOverlay {
     pub(crate) fn new(request: RequestUserInputEvent, app_event_tx: AppEventSender) -> Self {
@@ -167,6 +185,112 @@ impl RequestUserInputOverlay {
                 }
             })
             .count()
+    }
+
+    fn question_progress_text(&self) -> String {
+        if self.question_count() == 0 {
+            tr(self.language, "request_user_input.progress.none").to_string()
+        } else {
+            tr_args(
+                self.language,
+                "request_user_input.progress.question",
+                &[
+                    ("index", (self.current_idx + 1).to_string().as_str()),
+                    ("total", self.question_count().to_string().as_str()),
+                ],
+            )
+            .to_string()
+        }
+    }
+
+    fn request_search_blob(&self) -> String {
+        let mut blob = self.request.call_id.to_lowercase();
+        for question in &self.request.questions {
+            blob.push(' ');
+            blob.push_str(&question.id.to_lowercase());
+            blob.push(' ');
+            blob.push_str(&question.header.to_lowercase());
+            blob.push(' ');
+            blob.push_str(&question.question.to_lowercase());
+            if let Some(options) = &question.options {
+                for option in options {
+                    blob.push(' ');
+                    blob.push_str(&option.label.to_lowercase());
+                    blob.push(' ');
+                    blob.push_str(&option.description.to_lowercase());
+                }
+            }
+        }
+        blob
+    }
+
+    fn is_high_impact_request(&self) -> bool {
+        let blob = self.request_search_blob();
+        HIGH_IMPACT_KEYWORDS
+            .iter()
+            .any(|keyword| blob.contains(keyword))
+    }
+
+    fn banner_title_line(&self) -> Line<'static> {
+        if self.is_high_impact_request() {
+            let text = format!(
+                "⚠ {}",
+                tr(self.language, "request_user_input.banner.high_impact")
+            );
+            Line::from(text.red().bold())
+        } else {
+            let text = format!(
+                "• {}",
+                tr(self.language, "request_user_input.banner.action_required")
+            );
+            Line::from(text.yellow().bold())
+        }
+    }
+
+    fn banner_hint_line(&self) -> Line<'static> {
+        let key = if self.is_high_impact_request() {
+            "request_user_input.banner.high_impact_hint"
+        } else {
+            "request_user_input.banner.action_required_hint"
+        };
+        Line::from(tr(self.language, key).dim())
+    }
+
+    fn metadata_line(&self) -> Line<'static> {
+        let unanswered_count = self.unanswered_count();
+        let unanswered_text = tr_args(
+            self.language,
+            "request_user_input.progress.unanswered",
+            &[("count", unanswered_count.to_string().as_str())],
+        )
+        .to_string();
+        let unanswered_span = if unanswered_count > 0 {
+            unanswered_text.yellow().bold()
+        } else {
+            unanswered_text.green().dim()
+        };
+
+        Line::from(vec![
+            "request_user_input".bold(),
+            format!(" [{}]", self.request.call_id).dim(),
+            "  ".into(),
+            unanswered_span,
+            "  ".into(),
+            self.question_progress_text().cyan().bold(),
+        ])
+    }
+
+    fn section_header_line(&self, key: &'static str, active: bool) -> Line<'static> {
+        let label = format!(
+            "{} {}",
+            if active { "▸" } else { "•" },
+            tr(self.language, key)
+        );
+        if active {
+            Line::from(label.cyan().bold())
+        } else {
+            Line::from(label.dim())
+        }
     }
 
     fn focus_is_options(&self) -> bool {
@@ -393,13 +517,14 @@ impl RequestUserInputOverlay {
         } else {
             "request_user_input.footer.tab_add_notes"
         };
-        let text = format!(
-            "{} | {} | {}",
-            tr(self.language, tab_key),
-            tr(self.language, enter_hint_key),
-            tr(self.language, "request_user_input.footer.esc_interrupt")
-        );
-        Line::from(text.dim())
+        let mut parts: Vec<String> = Vec::new();
+        if self.has_options() {
+            parts.push(tr(self.language, "request_user_input.footer.up_down_select").to_string());
+        }
+        parts.push(tr(self.language, tab_key).to_string());
+        parts.push(tr(self.language, enter_hint_key).to_string());
+        parts.push(tr(self.language, "request_user_input.footer.esc_interrupt").to_string());
+        Line::from(parts.join(" | ").dim())
     }
 
     fn render_wrapped_line(
@@ -557,42 +682,21 @@ impl BottomPaneView for RequestUserInputOverlay {
 impl Renderable for RequestUserInputOverlay {
     fn desired_height(&self, width: u16) -> u16 {
         let content_width = width.saturating_sub(2).max(1);
-        let question_count = self.question_count();
-        let unanswered = self.unanswered_count().to_string();
-        let title_line = Line::from(vec![
-            "request_user_input".bold(),
-            format!(" [{}]", self.request.call_id).dim(),
-            " ".into(),
-            tr_args(
-                self.language,
-                "request_user_input.progress.unanswered",
-                &[("count", unanswered.as_str())],
-            )
-            .dim(),
-        ]);
-        let mut height: u16 = wrap_styled_line(&title_line, content_width).len() as u16;
+        let mut height: u16 = 0;
 
-        let progress = if question_count == 0 {
-            tr(self.language, "request_user_input.progress.none").to_string()
-        } else {
-            tr_args(
-                self.language,
-                "request_user_input.progress.question",
-                &[
-                    ("index", (self.current_idx + 1).to_string().as_str()),
-                    ("total", question_count.to_string().as_str()),
-                ],
-            )
-            .to_string()
-        };
-        height = height
-            .saturating_add(wrap_styled_line(&Line::from(progress), content_width).len() as u16);
+        for line in [
+            self.banner_title_line(),
+            self.banner_hint_line(),
+            self.metadata_line(),
+        ] {
+            height = height.saturating_add(wrap_styled_line(&line, content_width).len() as u16);
+        }
 
         if let Some(question) = self.current_question() {
             if !question.header.trim().is_empty() {
                 height = height.saturating_add(
-                    wrap_styled_line(&Line::from(question.header.clone()), content_width).len()
-                        as u16,
+                    wrap_styled_line(&Line::from(question.header.clone().bold()), content_width)
+                        .len() as u16,
                 );
             }
             if !question.question.trim().is_empty() {
@@ -602,6 +706,13 @@ impl Renderable for RequestUserInputOverlay {
                 );
             }
         }
+
+        let options_header = self.section_header_line(
+            "request_user_input.section.options",
+            self.focus_is_options(),
+        );
+        height =
+            height.saturating_add(wrap_styled_line(&options_header, content_width).len() as u16);
 
         let rows = self.current_option_rows();
         if rows.is_empty() {
@@ -619,11 +730,17 @@ impl Renderable for RequestUserInputOverlay {
             ));
         }
 
-        // notes label + notes input + footer hint
+        let notes_header = self.section_header_line(
+            "request_user_input.section.notes",
+            self.focus_is_notes() || !self.has_options(),
+        );
+        height = height.saturating_add(wrap_styled_line(&notes_header, content_width).len() as u16);
+
+        // note input + footer hint
         height
-            .saturating_add(3)
-            .max(6)
-            .min(MAX_POPUP_ROWS as u16 + 10)
+            .saturating_add(2)
+            .max(8)
+            .min(MAX_POPUP_ROWS as u16 + 14)
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
@@ -640,39 +757,21 @@ impl Renderable for RequestUserInputOverlay {
         let max_y = area.y.saturating_add(area.height);
         let mut y = area.y;
 
-        let unanswered = self.unanswered_count().to_string();
-        let title = Line::from(vec![
-            "request_user_input".bold(),
-            format!(" [{}]", self.request.call_id).dim(),
-            " ".into(),
-            tr_args(
-                self.language,
-                "request_user_input.progress.unanswered",
-                &[("count", unanswered.as_str())],
-            )
-            .dim(),
-        ]);
-        Self::render_wrapped_line(title, x, &mut y, max_y, width, buf);
-
-        let progress = if self.question_count() == 0 {
-            tr(self.language, "request_user_input.progress.none").to_string()
-        } else {
-            tr_args(
-                self.language,
-                "request_user_input.progress.question",
-                &[
-                    ("index", (self.current_idx + 1).to_string().as_str()),
-                    ("total", self.question_count().to_string().as_str()),
-                ],
-            )
-            .to_string()
-        };
-        Self::render_wrapped_line(Line::from(progress.dim()), x, &mut y, max_y, width, buf);
+        for line in [
+            self.banner_title_line(),
+            self.banner_hint_line(),
+            self.metadata_line(),
+        ] {
+            Self::render_wrapped_line(line, x, &mut y, max_y, width, buf);
+            if y >= max_y {
+                return;
+            }
+        }
 
         if let Some(question) = self.current_question() {
             if !question.header.trim().is_empty() {
                 Self::render_wrapped_line(
-                    Line::from(question.header.clone()),
+                    Line::from(question.header.clone().bold()),
                     x,
                     &mut y,
                     max_y,
@@ -692,6 +791,15 @@ impl Renderable for RequestUserInputOverlay {
             }
         }
 
+        if y >= max_y {
+            return;
+        }
+
+        let options_header = self.section_header_line(
+            "request_user_input.section.options",
+            self.focus_is_options(),
+        );
+        Self::render_wrapped_line(options_header, x, &mut y, max_y, width, buf);
         if y >= max_y {
             return;
         }
@@ -727,9 +835,11 @@ impl Renderable for RequestUserInputOverlay {
             return;
         }
 
-        let note_label =
-            Line::from(tr(self.language, "request_user_input.placeholder.notes").to_string());
-        Self::render_wrapped_line(note_label, x, &mut y, max_y, width, buf);
+        let notes_header = self.section_header_line(
+            "request_user_input.section.notes",
+            self.focus_is_notes() || !self.has_options(),
+        );
+        Self::render_wrapped_line(notes_header, x, &mut y, max_y, width, buf);
 
         if y >= max_y {
             return;
@@ -779,11 +889,7 @@ impl Renderable for RequestUserInputOverlay {
             return;
         }
 
-        let footer_hint = if self.question_count() > 1 {
-            self.footer_hint_line()
-        } else {
-            standard_popup_hint_line(self.language)
-        };
+        let footer_hint = self.footer_hint_line();
         Paragraph::new(footer_hint).render(
             Rect {
                 x,
@@ -858,6 +964,56 @@ mod tests {
                 },
             ],
         }
+    }
+
+    fn sample_high_impact_event(call_id: &str, turn_id: &str) -> RequestUserInputEvent {
+        RequestUserInputEvent {
+            call_id: call_id.to_string(),
+            turn_id: turn_id.to_string(),
+            questions: vec![RequestUserInputQuestion {
+                id: "expert_budget".to_string(),
+                header: "High cost expert model confirmation".to_string(),
+                question: "This may consume higher budget. Continue?".to_string(),
+                is_other: false,
+                is_secret: false,
+                options: Some(vec![
+                    RequestUserInputQuestionOption {
+                        label: "Continue".to_string(),
+                        description: "Proceed with expensive expert request".to_string(),
+                    },
+                    RequestUserInputQuestionOption {
+                        label: "Cancel".to_string(),
+                        description: "Stop this high-cost action".to_string(),
+                    },
+                ]),
+            }],
+        }
+    }
+
+    #[test]
+    fn high_impact_detection_matches_keywords() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let overlay = RequestUserInputOverlay::new(
+            sample_high_impact_event("rui-call-risk", "turn-risk"),
+            AppEventSender::new(tx_raw),
+        );
+        assert!(
+            overlay.is_high_impact_request(),
+            "expected keyword-based request to be detected as high impact"
+        );
+    }
+
+    #[test]
+    fn high_impact_detection_ignores_normal_prompts() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let overlay = RequestUserInputOverlay::new(
+            sample_request_user_input_event("rui-call-normal", "turn-normal"),
+            AppEventSender::new(tx_raw),
+        );
+        assert!(
+            !overlay.is_high_impact_request(),
+            "expected regular question flow to remain non-high-impact"
+        );
     }
 
     #[test]

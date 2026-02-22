@@ -412,6 +412,16 @@ select_option = "Select an option to add notes"
 label = "None of the above"
 description = "Optionally, add details in notes (tab)."
 
+[request_user_input.banner]
+action_required = "Action required"
+high_impact = "High-impact confirmation"
+action_required_hint = "Review the prompt and respond to continue."
+high_impact_hint = "This action may consume higher budget. Confirm carefully."
+
+[request_user_input.section]
+options = "Options"
+notes = "Notes"
+
 [request_user_input.confirm_unanswered]
 title = "Submit with unanswered questions?"
 subtitle = "${count} unanswered ${suffix}"
@@ -427,6 +437,7 @@ tab_add_notes = "tab to add notes"
 tab_or_esc_clear_notes = "tab or esc to clear notes"
 enter_submit_answer = "enter to submit answer"
 enter_submit_all = "enter to submit all"
+up_down_select = "↑/↓ to select"
 ctrl_n_first_question = "ctrl + n first question"
 ctrl_n_next_question = "ctrl + n next question"
 esc_interrupt = "esc to interrupt"
