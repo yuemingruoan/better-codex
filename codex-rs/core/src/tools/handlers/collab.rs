@@ -42,8 +42,13 @@ use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputQuestion;
 use codex_protocol::request_user_input::RequestUserInputQuestionOption;
 use codex_protocol::user_input::UserInput;
+use once_cell::sync::Lazy;
 use serde::Deserialize;
 use serde::Serialize;
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 pub struct CollabHandler;
 
@@ -51,16 +56,125 @@ pub struct CollabHandler;
 pub(crate) const MIN_WAIT_TIMEOUT_MS: i64 = 100;
 pub(crate) const DEFAULT_WAIT_TIMEOUT_MS: i64 = crate::config::DEFAULT_COLLAB_WAIT_TIMEOUT_MS;
 pub(crate) const MAX_WAIT_TIMEOUT_MS: i64 = 300_000;
-const ALLOWED_SPAWN_PRESETS: [&str; 6] = ["edit", "read", "grep", "run", "websearch", "expert"];
+const DEEPTHINK_PROGRESS_HISTORY_LIMIT: usize = 64;
+const ALLOWED_SPAWN_PRESETS: [&str; 11] = [
+    "edit",
+    "read",
+    "grep",
+    "run",
+    "websearch",
+    "expert",
+    "deepthink-expert",
+    "deepthink-search",
+    "deepthink-worker",
+    "deepthink-advisor",
+    "deepthink-reviewer",
+];
 const EXPERT_MAX_ROUNDS_PER_WINDOW: u8 = 3;
 const EXPERT_PRESET_MODEL: &str = "gpt-5.2-pro";
+const DEEPTHINK_SEARCH_PRESET_MODEL: &str = "o4-mini-deep-research";
+const DEEPTHINK_WORKER_PRESET_MODEL: &str = "gpt-5.2";
+const DEEPTHINK_REVIEWER_PRESET_MODEL: &str = "gpt-5.3-codex";
+const DEEPTHINK_EXPERT_STAGE_LABEL: &str = "deepthink-expert";
+const DEEPTHINK_SEARCH_STAGE_LABEL: &str = "deepthink-search";
+const DEEPTHINK_WORKER_STAGE_LABEL: &str = "deepthink-worker";
+const DEEPTHINK_REVIEWER_STAGE_LABEL: &str = "deepthink-reviewer";
 const WEBSEARCH_PRESET_INSTRUCTIONS_KEY: &str = "collab.subagent.websearch.base_instructions";
+const DEEPTHINK_EXPERT_PRESET_INSTRUCTIONS_KEY: &str =
+    "collab.subagent.deepthink_expert.base_instructions";
+const DEEPTHINK_SEARCH_PRESET_INSTRUCTIONS_KEY: &str =
+    "collab.subagent.deepthink_search.base_instructions";
+const DEEPTHINK_WORKER_PRESET_INSTRUCTIONS_KEY: &str =
+    "collab.subagent.deepthink_worker.base_instructions";
+const DEEPTHINK_REVIEWER_PRESET_INSTRUCTIONS_KEY: &str =
+    "collab.subagent.deepthink_reviewer.base_instructions";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SpawnPreset {
     Builtin(SubagentPreset),
     Expert,
+    DeepthinkExpert,
+    DeepthinkSearch,
+    DeepthinkWorker,
+    DeepthinkReviewer,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeepthinkStage {
+    Expert,
+    Search,
+    Worker,
+    Reviewer,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum DeepthinkPipelineStage {
+    NeedExpertPlan,
+    Collect,
+    Synthesize,
+    Review,
+    Complete,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum DeepthinkProgressPhase {
+    Planning,
+    Collecting,
+    Synthesizing,
+    Reviewing,
+    Completed,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum DeepthinkProgressStatus {
+    Pending,
+    InProgress,
+    Completed,
+    Blocked,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct DeepthinkProgressEntry {
+    phase: DeepthinkProgressPhase,
+    status: DeepthinkProgressStatus,
+    summary: String,
+    next_step: Option<String>,
+    needs_more_context: Option<bool>,
+    updated_at_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct DeepthinkPipelineSnapshot {
+    thread_id: String,
+    stage: DeepthinkPipelineStage,
+    start_gate_approved: bool,
+    history: Vec<DeepthinkProgressEntry>,
+}
+
+#[derive(Debug, Clone)]
+struct DeepthinkPipelineState {
+    stage: DeepthinkPipelineStage,
+    collected_since_last_collect_cycle: bool,
+    start_gate_approved: bool,
+    history: Vec<DeepthinkProgressEntry>,
+}
+
+impl Default for DeepthinkPipelineState {
+    fn default() -> Self {
+        Self {
+            stage: DeepthinkPipelineStage::NeedExpertPlan,
+            collected_since_last_collect_cycle: false,
+            start_gate_approved: false,
+            history: Vec::new(),
+        }
+    }
+}
+
+static DEEPTHINK_PIPELINE_STATE: Lazy<Mutex<HashMap<ThreadId, DeepthinkPipelineState>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -125,6 +239,12 @@ impl ToolHandler for CollabHandler {
             "rename_agent" => rename_agent::handle(session, call_id, arguments).await,
             "close_agent" => close_agent::handle(session, turn, call_id, arguments).await,
             "close_agents" => close_agents::handle(session, turn, call_id, arguments).await,
+            "deepthink_update_progress" => {
+                deepthink_update_progress::handle(session, turn, call_id, arguments).await
+            }
+            "deepthink_get_progress" => {
+                deepthink_get_progress::handle(session, turn, call_id, arguments).await
+            }
             other => Err(FunctionCallError::RespondToModel(format!(
                 "unsupported collab tool {other}"
             ))),
@@ -178,22 +298,63 @@ mod spawn {
             ));
         }
         let preset = parse_spawn_preset(args.preset.as_deref())?;
-        if matches!(preset, Some(SpawnPreset::Expert)) {
-            enforce_expert_spawn_caller(turn.as_ref())?;
+        let deepthink_caller = is_deepthink_caller(session.as_ref(), turn.as_ref()).await;
+        let deepthink_state =
+            deepthink_caller.then(|| load_deepthink_pipeline_state(session.conversation_id));
+        let mut deepthink_gate_newly_approved = false;
+        if matches!(
+            preset,
+            Some(SpawnPreset::Expert | SpawnPreset::DeepthinkExpert)
+        ) {
+            enforce_expert_spawn_caller(session.as_ref(), turn.as_ref(), preset).await?;
             let reason = parse_required_expert_reason(
                 turn.config.language,
                 args.must_call_reason.as_deref(),
                 false,
             )?;
-            request_expert_budget_approval(
-                session.as_ref(),
-                turn.as_ref(),
-                &call_id,
-                reason,
-                false,
-            )
-            .await?;
+            match preset {
+                Some(SpawnPreset::Expert) => {
+                    request_expert_budget_approval(
+                        session.as_ref(),
+                        turn.as_ref(),
+                        &call_id,
+                        reason,
+                        false,
+                    )
+                    .await?;
+                }
+                Some(SpawnPreset::DeepthinkExpert) => {
+                    let gate_already_approved = deepthink_state
+                        .as_ref()
+                        .is_some_and(|state| state.start_gate_approved);
+                    if !gate_already_approved {
+                        request_deepthink_start_approval(
+                            session.as_ref(),
+                            turn.as_ref(),
+                            &call_id,
+                            reason,
+                        )
+                        .await?;
+                        deepthink_gate_newly_approved = deepthink_caller;
+                    }
+                }
+                _ => {}
+            }
         }
+        let deepthink_next_state = if deepthink_caller {
+            enforce_deepthink_spawn_preset(turn.config.language, preset)?;
+            let current_state = deepthink_state.unwrap_or_default();
+            let mut next_state =
+                enforce_deepthink_pipeline_stage(&current_state, turn.config.language, preset)?;
+            if matches!(preset, Some(SpawnPreset::DeepthinkExpert))
+                && (current_state.start_gate_approved || deepthink_gate_newly_approved)
+            {
+                next_state.start_gate_approved = true;
+            }
+            Some(next_state)
+        } else {
+            None
+        };
         let agent_role = args.agent_type.unwrap_or(AgentRole::Default);
         let input_items = parse_collab_input(args.items)?;
         let prompt = input_preview(&input_items);
@@ -208,6 +369,7 @@ mod spawn {
             session.as_ref(),
             session.conversation_id,
             turn.config.as_ref(),
+            preset,
         )
         .await?;
         session
@@ -231,9 +393,12 @@ mod spawn {
         };
         let mut config =
             build_agent_spawn_config(session.as_ref(), turn.as_ref(), &overrides).await?;
+        let label = deepthink_stage_label(preset)
+            .map(str::to_string)
+            .or(args.name);
         let metadata = AgentSpawnMetadata {
             creator_thread_id: Some(session.conversation_id),
-            label: args.name,
+            label,
             goal: prompt.clone(),
             acceptance_criteria: args.acceptance_criteria.unwrap_or_default(),
             test_commands: args.test_commands.unwrap_or_default(),
@@ -281,6 +446,9 @@ mod spawn {
             )
             .await;
         let new_thread_id = result?;
+        if let Some(next_state) = deepthink_next_state {
+            persist_deepthink_pipeline_state(session.conversation_id, next_state);
+        }
 
         let content = serde_json::to_string(&SpawnAgentResult {
             agent_id: new_thread_id.to_string(),
@@ -1418,6 +1586,7 @@ async fn validate_spawn_limits(
     session: &Session,
     creator_thread_id: ThreadId,
     config: &Config,
+    spawn_preset: Option<SpawnPreset>,
 ) -> Result<(), FunctionCallError> {
     if let Some(parent) = session
         .services
@@ -1425,11 +1594,22 @@ async fn validate_spawn_limits(
         .get_agent_record(creator_thread_id)
         .await
         .map_err(collab_spawn_error)?
-        && !parent.allow_nested_agents
     {
-        return Err(FunctionCallError::RespondToModel(
-            "nested agent spawning is disabled for this agent".to_string(),
-        ));
+        let deepthink_can_spawn_dedicated = parent.label.as_deref().is_some_and(is_deepthink_label)
+            && matches!(
+                spawn_preset,
+                Some(
+                    SpawnPreset::DeepthinkExpert
+                        | SpawnPreset::DeepthinkSearch
+                        | SpawnPreset::DeepthinkWorker
+                        | SpawnPreset::DeepthinkReviewer
+                )
+            );
+        if !parent.allow_nested_agents && !deepthink_can_spawn_dedicated {
+            return Err(FunctionCallError::RespondToModel(
+                "nested agent spawning is disabled for this agent".to_string(),
+            ));
+        }
     }
 
     let depth = spawn_depth(session, creator_thread_id).await?;
@@ -1534,14 +1714,21 @@ fn apply_spawn_preset_instructions(
     config: &mut Config,
     overrides: &SpawnConfigOverrides,
 ) {
-    if !matches!(
-        overrides.preset,
-        Some(SpawnPreset::Builtin(SubagentPreset::Websearch))
-    ) {
+    let guidance_key = match overrides.preset {
+        Some(SpawnPreset::Builtin(SubagentPreset::Websearch)) => {
+            Some(WEBSEARCH_PRESET_INSTRUCTIONS_KEY)
+        }
+        Some(SpawnPreset::DeepthinkExpert) => Some(DEEPTHINK_EXPERT_PRESET_INSTRUCTIONS_KEY),
+        Some(SpawnPreset::DeepthinkSearch) => Some(DEEPTHINK_SEARCH_PRESET_INSTRUCTIONS_KEY),
+        Some(SpawnPreset::DeepthinkWorker) => Some(DEEPTHINK_WORKER_PRESET_INSTRUCTIONS_KEY),
+        Some(SpawnPreset::DeepthinkReviewer) => Some(DEEPTHINK_REVIEWER_PRESET_INSTRUCTIONS_KEY),
+        _ => None,
+    };
+    let Some(guidance_key) = guidance_key else {
         return;
-    }
+    };
 
-    let guidance = tr(turn.config.language, WEBSEARCH_PRESET_INSTRUCTIONS_KEY);
+    let guidance = tr(turn.config.language, guidance_key);
     if guidance.trim().is_empty() {
         return;
     }
@@ -1640,6 +1827,10 @@ fn parse_spawn_preset(preset: Option<&str>) -> Result<Option<SpawnPreset>, Funct
         "run" => SpawnPreset::Builtin(SubagentPreset::Run),
         "websearch" => SpawnPreset::Builtin(SubagentPreset::Websearch),
         "expert" => SpawnPreset::Expert,
+        "deepthink-expert" => SpawnPreset::DeepthinkExpert,
+        "deepthink-search" => SpawnPreset::DeepthinkSearch,
+        "deepthink-worker" => SpawnPreset::DeepthinkWorker,
+        "deepthink-advisor" | "deepthink-reviewer" => SpawnPreset::DeepthinkReviewer,
         _ => {
             let allowed = ALLOWED_SPAWN_PRESETS.join("|");
             return Err(FunctionCallError::RespondToModel(format!(
@@ -1650,7 +1841,233 @@ fn parse_spawn_preset(preset: Option<&str>) -> Result<Option<SpawnPreset>, Funct
     Ok(Some(parsed))
 }
 
-fn enforce_expert_spawn_caller(turn: &TurnContext) -> Result<(), FunctionCallError> {
+fn normalize_label_key(label: &str) -> String {
+    label
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn is_deepthink_label(label: &str) -> bool {
+    normalize_label_key(label) == "deepthink"
+}
+
+fn deepthink_stage_from_preset(preset: Option<SpawnPreset>) -> Option<DeepthinkStage> {
+    match preset {
+        Some(SpawnPreset::DeepthinkExpert) => Some(DeepthinkStage::Expert),
+        Some(SpawnPreset::DeepthinkSearch) => Some(DeepthinkStage::Search),
+        Some(SpawnPreset::DeepthinkReviewer) => Some(DeepthinkStage::Reviewer),
+        Some(SpawnPreset::DeepthinkWorker) => Some(DeepthinkStage::Worker),
+        _ => None,
+    }
+}
+
+fn deepthink_stage_label(preset: Option<SpawnPreset>) -> Option<&'static str> {
+    match preset {
+        Some(SpawnPreset::DeepthinkExpert) => Some(DEEPTHINK_EXPERT_STAGE_LABEL),
+        Some(SpawnPreset::DeepthinkSearch) => Some(DEEPTHINK_SEARCH_STAGE_LABEL),
+        Some(SpawnPreset::DeepthinkWorker) => Some(DEEPTHINK_WORKER_STAGE_LABEL),
+        Some(SpawnPreset::DeepthinkReviewer) => Some(DEEPTHINK_REVIEWER_STAGE_LABEL),
+        _ => None,
+    }
+}
+
+fn current_timestamp_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+fn load_deepthink_pipeline_state(thread_id: ThreadId) -> DeepthinkPipelineState {
+    DEEPTHINK_PIPELINE_STATE
+        .lock()
+        .ok()
+        .and_then(|state| state.get(&thread_id).cloned())
+        .unwrap_or_default()
+}
+
+fn persist_deepthink_pipeline_state(thread_id: ThreadId, state: DeepthinkPipelineState) {
+    if let Ok(mut map) = DEEPTHINK_PIPELINE_STATE.lock() {
+        map.insert(thread_id, state);
+    }
+}
+
+fn deepthink_pipeline_snapshot(thread_id: ThreadId) -> DeepthinkPipelineSnapshot {
+    let state = load_deepthink_pipeline_state(thread_id);
+    DeepthinkPipelineSnapshot {
+        thread_id: thread_id.to_string(),
+        stage: state.stage,
+        start_gate_approved: state.start_gate_approved,
+        history: state.history,
+    }
+}
+
+async fn is_deepthink_caller(session: &Session, turn: &TurnContext) -> bool {
+    if let SessionSource::SubAgent(SubAgentSource::Other(label)) = &turn.session_source
+        && is_deepthink_label(label)
+    {
+        return true;
+    }
+
+    match session
+        .services
+        .agent_control
+        .get_agent_record(session.conversation_id)
+        .await
+    {
+        Ok(Some(record)) => record.label.as_deref().is_some_and(is_deepthink_label),
+        Ok(None) | Err(_) => false,
+    }
+}
+
+fn is_deepthink_dispatch_preset(preset: Option<SpawnPreset>) -> bool {
+    matches!(
+        preset,
+        Some(
+            SpawnPreset::DeepthinkExpert
+                | SpawnPreset::DeepthinkSearch
+                | SpawnPreset::DeepthinkWorker
+                | SpawnPreset::DeepthinkReviewer
+        )
+    )
+}
+
+fn enforce_deepthink_spawn_preset(
+    language: codex_protocol::config_types::Language,
+    preset: Option<SpawnPreset>,
+) -> Result<(), FunctionCallError> {
+    if is_deepthink_dispatch_preset(preset) {
+        return Ok(());
+    }
+    Err(FunctionCallError::RespondToModel(
+        tr(language, "collab.deepthink.error.requires_deepthink_preset").to_string(),
+    ))
+}
+
+fn deepthink_pipeline_error(
+    language: codex_protocol::config_types::Language,
+    key: &'static str,
+) -> FunctionCallError {
+    FunctionCallError::RespondToModel(tr(language, key).to_string())
+}
+
+fn next_deepthink_pipeline_state(
+    state: &DeepthinkPipelineState,
+    preset: Option<SpawnPreset>,
+    language: codex_protocol::config_types::Language,
+) -> Result<DeepthinkPipelineState, FunctionCallError> {
+    let Some(stage) = deepthink_stage_from_preset(preset) else {
+        return Ok(state.clone());
+    };
+
+    let mut next = state.clone();
+    next.stage = match state.stage {
+        DeepthinkPipelineStage::NeedExpertPlan => match stage {
+            DeepthinkStage::Expert => {
+                next.collected_since_last_collect_cycle = false;
+                DeepthinkPipelineStage::Collect
+            }
+            _ => {
+                return Err(deepthink_pipeline_error(
+                    language,
+                    "collab.deepthink.error.requires_expert_first",
+                ));
+            }
+        },
+        DeepthinkPipelineStage::Collect => match stage {
+            DeepthinkStage::Search | DeepthinkStage::Worker => {
+                next.collected_since_last_collect_cycle = true;
+                DeepthinkPipelineStage::Collect
+            }
+            DeepthinkStage::Expert => {
+                if !state.collected_since_last_collect_cycle {
+                    return Err(deepthink_pipeline_error(
+                        language,
+                        "collab.deepthink.error.requires_collect_before_synthesis",
+                    ));
+                }
+                next.collected_since_last_collect_cycle = false;
+                DeepthinkPipelineStage::Synthesize
+            }
+            DeepthinkStage::Reviewer => {
+                return Err(deepthink_pipeline_error(
+                    language,
+                    "collab.deepthink.error.requires_expert_before_reviewer",
+                ));
+            }
+        },
+        DeepthinkPipelineStage::Synthesize => match stage {
+            DeepthinkStage::Expert => DeepthinkPipelineStage::Synthesize,
+            DeepthinkStage::Reviewer => {
+                next.collected_since_last_collect_cycle = false;
+                DeepthinkPipelineStage::Review
+            }
+            DeepthinkStage::Search | DeepthinkStage::Worker => {
+                next.collected_since_last_collect_cycle = true;
+                DeepthinkPipelineStage::Collect
+            }
+        },
+        DeepthinkPipelineStage::Review => match stage {
+            DeepthinkStage::Search | DeepthinkStage::Worker => {
+                next.collected_since_last_collect_cycle = true;
+                DeepthinkPipelineStage::Collect
+            }
+            DeepthinkStage::Expert | DeepthinkStage::Reviewer => {
+                return Err(deepthink_pipeline_error(
+                    language,
+                    "collab.deepthink.error.requires_collect_after_review",
+                ));
+            }
+        },
+        DeepthinkPipelineStage::Complete => {
+            return Err(deepthink_pipeline_error(
+                language,
+                "collab.deepthink.error.pipeline_completed",
+            ));
+        }
+    };
+    Ok(next)
+}
+
+fn enforce_deepthink_pipeline_stage(
+    state: &DeepthinkPipelineState,
+    language: codex_protocol::config_types::Language,
+    preset: Option<SpawnPreset>,
+) -> Result<DeepthinkPipelineState, FunctionCallError> {
+    next_deepthink_pipeline_state(state, preset, language)
+}
+
+async fn enforce_expert_spawn_caller(
+    session: &Session,
+    turn: &TurnContext,
+    preset: Option<SpawnPreset>,
+) -> Result<(), FunctionCallError> {
+    if matches!(preset, Some(SpawnPreset::DeepthinkExpert)) {
+        if matches!(turn.session_source, SessionSource::SubAgent(_))
+            && !is_deepthink_caller(session, turn).await
+        {
+            return Err(FunctionCallError::RespondToModel(
+                tr(
+                    turn.config.language,
+                    "collab.expert.error.subagent_spawn_forbidden",
+                )
+                .to_string(),
+            ));
+        }
+        return Ok(());
+    }
+
+    if is_deepthink_caller(session, turn).await {
+        return Err(FunctionCallError::RespondToModel(
+            tr(
+                turn.config.language,
+                "collab.expert.error.deepthink_spawn_forbidden",
+            )
+            .to_string(),
+        ));
+    }
     if matches!(turn.session_source, SessionSource::SubAgent(_)) {
         return Err(FunctionCallError::RespondToModel(
             tr(
@@ -1661,6 +2078,145 @@ fn enforce_expert_spawn_caller(turn: &TurnContext) -> Result<(), FunctionCallErr
         ));
     }
     Ok(())
+}
+
+fn add_deepthink_progress_entry(
+    thread_id: ThreadId,
+    entry: DeepthinkProgressEntry,
+    maybe_stage: Option<DeepthinkPipelineStage>,
+) -> DeepthinkPipelineSnapshot {
+    let mut state = load_deepthink_pipeline_state(thread_id);
+    if let Some(stage) = maybe_stage {
+        state.stage = stage;
+    }
+    state.history.push(entry);
+    if state.history.len() > DEEPTHINK_PROGRESS_HISTORY_LIMIT {
+        let overflow = state.history.len() - DEEPTHINK_PROGRESS_HISTORY_LIMIT;
+        state.history.drain(0..overflow);
+    }
+    persist_deepthink_pipeline_state(thread_id, state.clone());
+    DeepthinkPipelineSnapshot {
+        thread_id: thread_id.to_string(),
+        stage: state.stage,
+        start_gate_approved: state.start_gate_approved,
+        history: state.history,
+    }
+}
+
+mod deepthink_update_progress {
+    use super::*;
+    use std::sync::Arc;
+
+    #[derive(Debug, Deserialize)]
+    struct DeepthinkUpdateProgressArgs {
+        phase: DeepthinkProgressPhase,
+        status: DeepthinkProgressStatus,
+        summary: String,
+        next_step: Option<String>,
+        needs_more_context: Option<bool>,
+    }
+
+    pub async fn handle(
+        session: Arc<Session>,
+        turn: Arc<TurnContext>,
+        _call_id: String,
+        arguments: String,
+    ) -> Result<ToolOutput, FunctionCallError> {
+        if !is_deepthink_caller(session.as_ref(), turn.as_ref()).await {
+            return Err(FunctionCallError::RespondToModel(
+                tr(
+                    turn.config.language,
+                    "collab.deepthink.error.progress_update_forbidden",
+                )
+                .to_string(),
+            ));
+        }
+        let args: DeepthinkUpdateProgressArgs = parse_arguments(&arguments)?;
+        let summary = args.summary.trim();
+        if summary.is_empty() {
+            return Err(FunctionCallError::RespondToModel(
+                "summary must not be empty".to_string(),
+            ));
+        }
+
+        let next_stage = match (args.phase, args.status, args.needs_more_context) {
+            (DeepthinkProgressPhase::Reviewing, DeepthinkProgressStatus::Completed, Some(true)) => {
+                Some(DeepthinkPipelineStage::Collect)
+            }
+            (
+                DeepthinkProgressPhase::Reviewing,
+                DeepthinkProgressStatus::Completed,
+                Some(false) | None,
+            ) => Some(DeepthinkPipelineStage::Complete),
+            (DeepthinkProgressPhase::Reviewing, DeepthinkProgressStatus::Blocked, _) => {
+                Some(DeepthinkPipelineStage::Collect)
+            }
+            (
+                DeepthinkProgressPhase::Reviewing,
+                DeepthinkProgressStatus::InProgress,
+                Some(true),
+            ) => Some(DeepthinkPipelineStage::Collect),
+            _ => None,
+        };
+
+        let snapshot = add_deepthink_progress_entry(
+            session.conversation_id,
+            DeepthinkProgressEntry {
+                phase: args.phase,
+                status: args.status,
+                summary: summary.to_string(),
+                next_step: args
+                    .next_step
+                    .map(|v| v.trim().to_string())
+                    .filter(|v| !v.is_empty()),
+                needs_more_context: args.needs_more_context,
+                updated_at_ms: current_timestamp_ms(),
+            },
+            next_stage,
+        );
+        let content = serde_json::to_string(&snapshot).map_err(|err| {
+            FunctionCallError::Fatal(format!(
+                "failed to serialize deepthink_update_progress result: {err}"
+            ))
+        })?;
+        Ok(ToolOutput::Function {
+            body: FunctionCallOutputBody::Text(content),
+            success: Some(true),
+        })
+    }
+}
+
+mod deepthink_get_progress {
+    use super::*;
+    use std::sync::Arc;
+
+    #[derive(Debug, Deserialize)]
+    struct DeepthinkGetProgressArgs {
+        deepthink_agent_id: Option<String>,
+    }
+
+    pub async fn handle(
+        session: Arc<Session>,
+        _turn: Arc<TurnContext>,
+        _call_id: String,
+        arguments: String,
+    ) -> Result<ToolOutput, FunctionCallError> {
+        let args: DeepthinkGetProgressArgs = parse_arguments(&arguments)?;
+        let target_thread_id = match args.deepthink_agent_id.as_deref() {
+            Some(id) => agent_id(id)?,
+            None => session.conversation_id,
+        };
+        let snapshot = deepthink_pipeline_snapshot(target_thread_id);
+        let content = serde_json::to_string(&snapshot).map_err(|err| {
+            FunctionCallError::Fatal(format!(
+                "failed to serialize deepthink_get_progress result: {err}"
+            ))
+        })?;
+        Ok(ToolOutput::Function {
+            body: FunctionCallOutputBody::Text(content),
+            success: Some(true),
+        })
+    }
 }
 
 fn parse_required_expert_reason<'a>(
@@ -1799,6 +2355,63 @@ async fn request_expert_budget_approval(
     }
 }
 
+async fn request_deepthink_start_approval(
+    session: &Session,
+    turn: &TurnContext,
+    call_id: &str,
+    reason: &str,
+) -> Result<(), FunctionCallError> {
+    let language = turn.config.language;
+    let question_id = "deepthink_start_approval".to_string();
+    let approve_label = tr(language, "collab.expert.option.approve").to_string();
+    let cancel_label = tr(language, "collab.expert.option.cancel").to_string();
+    let args = RequestUserInputArgs {
+        questions: vec![RequestUserInputQuestion {
+            id: question_id.clone(),
+            header: tr(language, "collab.deepthink.approval.header").to_string(),
+            question: tr_args(
+                language,
+                "collab.deepthink.approval.question",
+                &[("reason", reason)],
+            ),
+            is_other: false,
+            is_secret: false,
+            options: Some(vec![
+                RequestUserInputQuestionOption {
+                    label: approve_label.clone(),
+                    description: tr(language, "collab.deepthink.option.approve_desc").to_string(),
+                },
+                RequestUserInputQuestionOption {
+                    label: cancel_label,
+                    description: tr(language, "collab.deepthink.option.cancel_desc").to_string(),
+                },
+            ]),
+        }],
+    };
+    let response = session
+        .request_user_input(turn, call_id.to_string(), args)
+        .await
+        .ok_or_else(|| {
+            FunctionCallError::RespondToModel(
+                tr(language, "collab.deepthink.error.approval_declined").to_string(),
+            )
+        })?;
+    let approved =
+        response
+            .answers
+            .get(&question_id)
+            .is_some_and(|RequestUserInputAnswer { answers }| {
+                answers.iter().any(|answer| answer == &approve_label)
+            });
+    if approved {
+        Ok(())
+    } else {
+        Err(FunctionCallError::RespondToModel(
+            tr(language, "collab.deepthink.error.approval_declined").to_string(),
+        ))
+    }
+}
+
 async fn apply_spawn_model_overrides(
     session: &Session,
     turn: &TurnContext,
@@ -1813,8 +2426,19 @@ async fn apply_spawn_model_overrides(
         SpawnPreset::Builtin(SubagentPreset::Websearch) => {
             Some(&turn.config.subagent_presets.websearch)
         }
-        SpawnPreset::Expert => None,
+        SpawnPreset::Expert
+        | SpawnPreset::DeepthinkExpert
+        | SpawnPreset::DeepthinkSearch
+        | SpawnPreset::DeepthinkWorker
+        | SpawnPreset::DeepthinkReviewer => None,
     });
+    let deepthink_preset_model = match overrides.preset {
+        Some(SpawnPreset::DeepthinkExpert) => Some(EXPERT_PRESET_MODEL),
+        Some(SpawnPreset::DeepthinkSearch) => Some(DEEPTHINK_SEARCH_PRESET_MODEL),
+        Some(SpawnPreset::DeepthinkWorker) => Some(DEEPTHINK_WORKER_PRESET_MODEL),
+        Some(SpawnPreset::DeepthinkReviewer) => Some(DEEPTHINK_REVIEWER_PRESET_MODEL),
+        _ => None,
+    };
     let preset_reasoning_effort = preset_config.and_then(|preset| preset.reasoning_effort);
     let expert_preset_model =
         matches!(overrides.preset, Some(SpawnPreset::Expert)).then_some(EXPERT_PRESET_MODEL);
@@ -1822,6 +2446,7 @@ async fn apply_spawn_model_overrides(
         .model
         .as_deref()
         .or_else(|| preset_config.and_then(|preset| preset.model.as_deref()))
+        .or(deepthink_preset_model)
         .or(expert_preset_model)
     {
         let model = model.trim();
@@ -1834,6 +2459,12 @@ async fn apply_spawn_model_overrides(
         config.model = Some(model.to_string());
     }
 
+    if matches!(overrides.preset, Some(SpawnPreset::DeepthinkSearch))
+        && overrides.reasoning_effort.is_none()
+    {
+        // Search preset should stay lightweight and avoid inherited reasoning effort.
+        config.model_reasoning_effort = None;
+    }
     if let Some(reasoning_effort) = overrides.reasoning_effort.or(preset_reasoning_effort) {
         config.model_reasoning_effort = Some(reasoning_effort);
     }
@@ -2083,6 +2714,27 @@ mod tests {
         }
     }
 
+    async fn recv_request_user_input_event_with_timeout(
+        rx: &async_channel::Receiver<Event>,
+        wait: Duration,
+    ) -> Option<RequestUserInputEvent> {
+        let deadline = tokio::time::Instant::now() + wait;
+        loop {
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                return None;
+            }
+            let remaining = deadline.saturating_duration_since(now);
+            let event = match timeout(remaining, rx.recv()).await {
+                Ok(Ok(event)) => event,
+                Ok(Err(_)) | Err(_) => return None,
+            };
+            if let EventMsg::RequestUserInput(event) = event.msg {
+                return Some(event);
+            }
+        }
+    }
+
     #[tokio::test]
     async fn handler_rejects_non_function_payloads() {
         let (session, turn) = make_session_and_context().await;
@@ -2240,11 +2892,24 @@ mod tests {
         let Err(err) = CollabHandler.handle(invocation).await else {
             panic!("unknown preset should be rejected");
         };
+        let allowed = ALLOWED_SPAWN_PRESETS.join("|");
         assert_eq!(
             err,
-            FunctionCallError::RespondToModel(
-                "unsupported preset `not-a-real-preset`; expected one of edit|read|grep|run|websearch|expert / 不支持的 preset `not-a-real-preset`，可选值：edit|read|grep|run|websearch|expert".to_string()
-            )
+            FunctionCallError::RespondToModel(format!(
+                "unsupported preset `not-a-real-preset`; expected one of {allowed} / 不支持的 preset `not-a-real-preset`，可选值：{allowed}"
+            ))
+        );
+    }
+
+    #[test]
+    fn parse_spawn_preset_supports_deepthink_reviewer_and_advisor_alias() {
+        assert_eq!(
+            parse_spawn_preset(Some("deepthink-reviewer")),
+            Ok(Some(SpawnPreset::DeepthinkReviewer))
+        );
+        assert_eq!(
+            parse_spawn_preset(Some("deepthink-advisor")),
+            Ok(Some(SpawnPreset::DeepthinkReviewer))
         );
     }
 
@@ -2277,6 +2942,77 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn spawn_agent_expert_rejects_deepthink_subagent_caller() {
+        let (session, mut turn) = make_session_and_context().await;
+        turn.session_source =
+            SessionSource::SubAgent(SubAgentSource::Other("deepthink".to_string()));
+        let expected_message = tr(
+            turn.config.language,
+            "collab.expert.error.deepthink_spawn_forbidden",
+        )
+        .to_string();
+        let invocation = invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "items": [{"type": "text", "text": "hard task"}],
+                "preset": "expert",
+                "must_call_reason": "Need specialist support",
+            })),
+        );
+        let Err(err) = CollabHandler.handle(invocation).await else {
+            panic!("expert spawn should reject deepthink callers");
+        };
+        assert_eq!(err, FunctionCallError::RespondToModel(expected_message));
+    }
+
+    #[tokio::test]
+    async fn spawn_agent_expert_rejects_deepthink_label_caller() {
+        let (mut session, turn) = make_session_and_context().await;
+        let manager = thread_manager();
+        let control = manager.agent_control();
+        session.services.agent_control = control.clone();
+
+        let deepthink_agent_id = control
+            .spawn_agent_with_metadata(
+                turn.config.as_ref().clone(),
+                "deepthink planning".to_string(),
+                AgentSpawnMetadata {
+                    label: Some("DeepThink".to_string()),
+                    creator_thread_id: Some(ThreadId::new()),
+                    ..AgentSpawnMetadata::default()
+                },
+            )
+            .await
+            .expect("spawn deepthink agent");
+
+        session.conversation_id = deepthink_agent_id;
+
+        let expected_message = tr(
+            turn.config.language,
+            "collab.expert.error.deepthink_spawn_forbidden",
+        )
+        .to_string();
+        let invocation = invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "items": [{"type": "text", "text": "hard task"}],
+                "preset": "expert",
+                "must_call_reason": "Need specialist support",
+            })),
+        );
+        let Err(err) = CollabHandler.handle(invocation).await else {
+            panic!("expert spawn should reject deepthink labeled callers");
+        };
+        assert_eq!(err, FunctionCallError::RespondToModel(expected_message));
+
+        let _ = control.shutdown_agent(deepthink_agent_id).await;
+    }
+
+    #[tokio::test]
     async fn spawn_agent_expert_requires_must_call_reason() {
         let (session, turn) = make_session_and_context().await;
         let expected_message =
@@ -2294,6 +3030,317 @@ mod tests {
             panic!("expert spawn should require must_call_reason");
         };
         assert_eq!(err, FunctionCallError::RespondToModel(expected_message));
+    }
+
+    #[tokio::test]
+    async fn spawn_agent_deepthink_expert_requires_must_call_reason() {
+        let (session, turn) = make_session_and_context().await;
+        let expected_message =
+            tr(turn.config.language, "collab.expert.error.reason_required").to_string();
+        let invocation = invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "items": [{"type": "text", "text": "hard task"}],
+                "preset": "deepthink-expert"
+            })),
+        );
+        let Err(err) = CollabHandler.handle(invocation).await else {
+            panic!("deepthink-expert spawn should require must_call_reason");
+        };
+        assert_eq!(err, FunctionCallError::RespondToModel(expected_message));
+    }
+
+    #[tokio::test]
+    async fn spawn_agent_deepthink_expert_allows_deepthink_caller_with_approval() {
+        let (mut session, mut turn, rx) = make_session_and_context_with_rx().await;
+        overwrite_turn_config(
+            Arc::get_mut(&mut turn).expect("turn should not be shared"),
+            |config| {
+                config.max_spawn_depth = 2;
+            },
+        );
+        let manager = thread_manager();
+        let control = manager.agent_control();
+        let root_thread_id = session.conversation_id;
+        Arc::get_mut(&mut session)
+            .expect("session should not be shared")
+            .services
+            .agent_control = control.clone();
+        *session.active_turn.lock().await = Some(ActiveTurn::default());
+        let deepthink_id = control
+            .spawn_agent_with_metadata(
+                turn.config.as_ref().clone(),
+                "deepthink planner".to_string(),
+                AgentSpawnMetadata {
+                    creator_thread_id: Some(root_thread_id),
+                    label: Some("deepthink".to_string()),
+                    allow_nested_agents: true,
+                    ..AgentSpawnMetadata::default()
+                },
+            )
+            .await
+            .expect("spawn deepthink orchestrator");
+        Arc::get_mut(&mut session)
+            .expect("session should not be shared")
+            .conversation_id = deepthink_id;
+
+        let approve_label = tr(turn.config.language, "collab.expert.option.approve").to_string();
+        let spawn_invocation = invocation(
+            session.clone(),
+            turn.clone(),
+            "spawn_agent",
+            function_payload(json!({
+                "items": [{"type": "text", "text": "plan and synthesize"}],
+                "preset": "deepthink-expert",
+                "must_call_reason": "Need deepthink expert planning",
+            })),
+        );
+        let spawn_task = tokio::spawn(async move { CollabHandler.handle(spawn_invocation).await });
+        let approval = recv_request_user_input_event(&rx).await;
+        let question = approval
+            .questions
+            .first()
+            .expect("deepthink expert approval question");
+        assert_eq!(question.id, "deepthink_start_approval");
+        assert!(question.question.contains("Need deepthink expert planning"));
+        assert!(!question.question.contains("3"));
+        session
+            .notify_user_input_response(
+                &turn.sub_id,
+                RequestUserInputResponse {
+                    answers: HashMap::from([(
+                        "deepthink_start_approval".to_string(),
+                        RequestUserInputAnswer {
+                            answers: vec![approve_label],
+                        },
+                    )]),
+                },
+            )
+            .await;
+
+        let spawn_output = spawn_task
+            .await
+            .expect("spawn task should join")
+            .expect("deepthink expert spawn should succeed");
+        let ToolOutput::Function {
+            body: FunctionCallOutputBody::Text(spawn_content),
+            success: spawn_success,
+            ..
+        } = spawn_output
+        else {
+            panic!("expected function output");
+        };
+        assert_eq!(spawn_success, Some(true));
+        let spawn_value: serde_json::Value =
+            serde_json::from_str(&spawn_content).expect("spawn result json");
+        let expert_agent_id = spawn_value
+            .get("agent_id")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|id| ThreadId::from_string(id).ok())
+            .expect("expert agent id should be present");
+        let expert_record = control
+            .get_agent_record(expert_agent_id)
+            .await
+            .expect("load expert record")
+            .expect("expert record should exist");
+        assert!(
+            expert_record.expert_budget.is_none(),
+            "deepthink expert should not carry expert budget"
+        );
+        let snapshot = deepthink_pipeline_snapshot(deepthink_id);
+        assert_eq!(snapshot.stage, DeepthinkPipelineStage::Collect);
+        assert!(snapshot.start_gate_approved);
+
+        let _ = control.shutdown_agent(expert_agent_id).await;
+        let _ = control.shutdown_agent(deepthink_id).await;
+    }
+
+    #[tokio::test]
+    async fn spawn_agent_deepthink_expert_gate_only_asks_approval_once_per_thread() {
+        let (mut session, mut turn, rx) = make_session_and_context_with_rx().await;
+        overwrite_turn_config(
+            Arc::get_mut(&mut turn).expect("turn should not be shared"),
+            |config| {
+                config.max_spawn_depth = 2;
+            },
+        );
+        let manager = thread_manager();
+        let control = manager.agent_control();
+        let root_thread_id = session.conversation_id;
+        Arc::get_mut(&mut session)
+            .expect("session should not be shared")
+            .services
+            .agent_control = control.clone();
+        *session.active_turn.lock().await = Some(ActiveTurn::default());
+        let deepthink_id = control
+            .spawn_agent_with_metadata(
+                turn.config.as_ref().clone(),
+                "deepthink planner".to_string(),
+                AgentSpawnMetadata {
+                    creator_thread_id: Some(root_thread_id),
+                    label: Some("deepthink".to_string()),
+                    allow_nested_agents: true,
+                    ..AgentSpawnMetadata::default()
+                },
+            )
+            .await
+            .expect("spawn deepthink orchestrator");
+        Arc::get_mut(&mut session)
+            .expect("session should not be shared")
+            .conversation_id = deepthink_id;
+
+        let approve_label = tr(turn.config.language, "collab.expert.option.approve").to_string();
+        let first_spawn = invocation(
+            session.clone(),
+            turn.clone(),
+            "spawn_agent",
+            function_payload(json!({
+                "items": [{"type": "text", "text": "initial deepthink planning"}],
+                "preset": "deepthink-expert",
+                "must_call_reason": "Need deepthink kickoff",
+            })),
+        );
+        let first_spawn_task = tokio::spawn(async move { CollabHandler.handle(first_spawn).await });
+        let first_approval = recv_request_user_input_event(&rx).await;
+        let first_question = first_approval
+            .questions
+            .first()
+            .expect("deepthink start approval question");
+        assert_eq!(first_question.id, "deepthink_start_approval");
+        assert!(first_question.question.contains("Need deepthink kickoff"));
+        session
+            .notify_user_input_response(
+                &turn.sub_id,
+                RequestUserInputResponse {
+                    answers: HashMap::from([(
+                        "deepthink_start_approval".to_string(),
+                        RequestUserInputAnswer {
+                            answers: vec![approve_label.clone()],
+                        },
+                    )]),
+                },
+            )
+            .await;
+        let first_spawn_output = first_spawn_task
+            .await
+            .expect("first spawn task should join")
+            .expect("first deepthink expert spawn should succeed");
+        let ToolOutput::Function {
+            body: FunctionCallOutputBody::Text(first_spawn_content),
+            success: first_spawn_success,
+            ..
+        } = first_spawn_output
+        else {
+            panic!("expected function output");
+        };
+        assert_eq!(first_spawn_success, Some(true));
+        let first_spawn_value: serde_json::Value =
+            serde_json::from_str(&first_spawn_content).expect("first spawn result json");
+        let first_expert_id = first_spawn_value
+            .get("agent_id")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|id| ThreadId::from_string(id).ok())
+            .expect("first expert agent id should be present");
+        let first_expert_record = control
+            .get_agent_record(first_expert_id)
+            .await
+            .expect("load first expert record")
+            .expect("first expert record should exist");
+        assert!(
+            first_expert_record.expert_budget.is_none(),
+            "deepthink expert should not carry expert budget"
+        );
+
+        let search_spawn = invocation(
+            session.clone(),
+            turn.clone(),
+            "spawn_agent",
+            function_payload(json!({
+                "items": [{"type": "text", "text": "collect evidence before synthesis"}],
+                "preset": "deepthink-search",
+            })),
+        );
+        let search_output = CollabHandler
+            .handle(search_spawn)
+            .await
+            .expect("deepthink search spawn should succeed");
+        let ToolOutput::Function {
+            body: FunctionCallOutputBody::Text(search_spawn_content),
+            success: search_spawn_success,
+            ..
+        } = search_output
+        else {
+            panic!("expected function output");
+        };
+        assert_eq!(search_spawn_success, Some(true));
+        let search_spawn_value: serde_json::Value =
+            serde_json::from_str(&search_spawn_content).expect("search spawn result json");
+        let search_agent_id = search_spawn_value
+            .get("agent_id")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|id| ThreadId::from_string(id).ok())
+            .expect("search agent id should be present");
+
+        let second_spawn = invocation(
+            session.clone(),
+            turn.clone(),
+            "spawn_agent",
+            function_payload(json!({
+                "items": [{"type": "text", "text": "synthesize using collected evidence"}],
+                "preset": "deepthink-expert",
+                "must_call_reason": "Need deep synthesis pass",
+            })),
+        );
+        let second_spawn_output = timeout(
+            Duration::from_millis(300),
+            tokio::spawn(async move { CollabHandler.handle(second_spawn).await }),
+        )
+        .await
+        .expect("second deepthink expert spawn should not wait on approval")
+        .expect("second spawn task should join")
+        .expect("second deepthink expert spawn should succeed");
+        let maybe_second_approval =
+            recv_request_user_input_event_with_timeout(&rx, Duration::from_millis(150)).await;
+        assert!(
+            maybe_second_approval.is_none(),
+            "second deepthink expert spawn should not request approval again"
+        );
+
+        let ToolOutput::Function {
+            body: FunctionCallOutputBody::Text(second_spawn_content),
+            success: second_spawn_success,
+            ..
+        } = second_spawn_output
+        else {
+            panic!("expected function output");
+        };
+        assert_eq!(second_spawn_success, Some(true));
+        let second_spawn_value: serde_json::Value =
+            serde_json::from_str(&second_spawn_content).expect("second spawn result json");
+        let second_expert_id = second_spawn_value
+            .get("agent_id")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|id| ThreadId::from_string(id).ok())
+            .expect("second expert agent id should be present");
+        let second_expert_record = control
+            .get_agent_record(second_expert_id)
+            .await
+            .expect("load second expert record")
+            .expect("second expert record should exist");
+        assert!(
+            second_expert_record.expert_budget.is_none(),
+            "deepthink expert should not carry expert budget"
+        );
+        let snapshot = deepthink_pipeline_snapshot(deepthink_id);
+        assert_eq!(snapshot.stage, DeepthinkPipelineStage::Synthesize);
+        assert!(snapshot.start_gate_approved);
+
+        let _ = control.shutdown_agent(second_expert_id).await;
+        let _ = control.shutdown_agent(search_agent_id).await;
+        let _ = control.shutdown_agent(first_expert_id).await;
+        let _ = control.shutdown_agent(deepthink_id).await;
     }
 
     #[tokio::test]
@@ -2600,6 +3647,472 @@ mod tests {
                 "nested agent spawning is disabled for this agent".to_string()
             )
         );
+    }
+
+    #[tokio::test]
+    async fn spawn_agent_allows_nested_deepthink_worker_after_expert_planning_stage() {
+        let (mut session, mut turn) = make_session_and_context().await;
+        overwrite_turn_config(&mut turn, |config| {
+            config.max_spawn_depth = 2;
+        });
+        let manager = thread_manager();
+        let control = manager.agent_control();
+        session.services.agent_control = control.clone();
+        let root_thread_id = session.conversation_id;
+        let config = turn.config.as_ref().clone();
+        let deepthink_id = control
+            .spawn_agent_with_metadata(
+                config,
+                "deepthink planner".to_string(),
+                AgentSpawnMetadata {
+                    creator_thread_id: Some(root_thread_id),
+                    label: Some("deepthink".to_string()),
+                    allow_nested_agents: false,
+                    ..AgentSpawnMetadata::default()
+                },
+            )
+            .await
+            .expect("spawn deepthink");
+        session.conversation_id = deepthink_id;
+        persist_deepthink_pipeline_state(
+            deepthink_id,
+            DeepthinkPipelineState {
+                stage: DeepthinkPipelineStage::Collect,
+                collected_since_last_collect_cycle: false,
+                start_gate_approved: true,
+                history: Vec::new(),
+            },
+        );
+
+        let worker_invocation = invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "items": [{"type": "text", "text": "read repo state"}],
+                "preset": "deepthink-worker"
+            })),
+        );
+        let output = CollabHandler
+            .handle(worker_invocation)
+            .await
+            .expect("deepthink worker stage should spawn after expert planning stage");
+        let ToolOutput::Function { success, .. } = output else {
+            panic!("expected function output");
+        };
+        assert_eq!(success, Some(true));
+    }
+
+    #[tokio::test]
+    async fn spawn_agent_rejects_deepthink_worker_before_expert_stage() {
+        let (mut session, mut turn) = make_session_and_context().await;
+        overwrite_turn_config(&mut turn, |config| {
+            config.max_spawn_depth = 2;
+        });
+        let manager = thread_manager();
+        let control = manager.agent_control();
+        session.services.agent_control = control.clone();
+        let root_thread_id = session.conversation_id;
+        let config = turn.config.as_ref().clone();
+        let deepthink_id = control
+            .spawn_agent_with_metadata(
+                config,
+                "deepthink planner".to_string(),
+                AgentSpawnMetadata {
+                    creator_thread_id: Some(root_thread_id),
+                    label: Some("deepthink".to_string()),
+                    allow_nested_agents: false,
+                    ..AgentSpawnMetadata::default()
+                },
+            )
+            .await
+            .expect("spawn deepthink");
+        session.conversation_id = deepthink_id;
+
+        let expected_message = tr(
+            turn.config.language,
+            "collab.deepthink.error.requires_expert_first",
+        )
+        .to_string();
+        let invocation = invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "items": [{"type": "text", "text": "design module boundaries"}],
+                "preset": "deepthink-worker"
+            })),
+        );
+        let Err(err) = CollabHandler.handle(invocation).await else {
+            panic!("deepthink worker should require the initial expert planning stage");
+        };
+        assert_eq!(err, FunctionCallError::RespondToModel(expected_message));
+    }
+
+    #[tokio::test]
+    async fn deepthink_pipeline_enforces_expert_collect_synthesis_reviewer_sequence() {
+        let (_session, turn) = make_session_and_context().await;
+        let language = turn.config.language;
+
+        let mut state = DeepthinkPipelineState::default();
+        state = next_deepthink_pipeline_state(&state, Some(SpawnPreset::DeepthinkExpert), language)
+            .expect("first stage should accept deepthink expert");
+        assert_eq!(state.stage, DeepthinkPipelineStage::Collect);
+        assert!(!state.collected_since_last_collect_cycle);
+
+        let Err(reviewer_before_synthesis) =
+            next_deepthink_pipeline_state(&state, Some(SpawnPreset::DeepthinkReviewer), language)
+        else {
+            panic!("reviewer should require prior expert synthesis");
+        };
+        assert_eq!(
+            reviewer_before_synthesis,
+            FunctionCallError::RespondToModel(
+                tr(
+                    language,
+                    "collab.deepthink.error.requires_expert_before_reviewer"
+                )
+                .to_string()
+            )
+        );
+
+        state = next_deepthink_pipeline_state(&state, Some(SpawnPreset::DeepthinkSearch), language)
+            .expect("collect stage should accept search");
+        assert_eq!(state.stage, DeepthinkPipelineStage::Collect);
+        assert!(state.collected_since_last_collect_cycle);
+
+        state = next_deepthink_pipeline_state(&state, Some(SpawnPreset::DeepthinkExpert), language)
+            .expect("expert synthesis should be allowed after collect");
+        assert_eq!(state.stage, DeepthinkPipelineStage::Synthesize);
+        assert!(!state.collected_since_last_collect_cycle);
+
+        state =
+            next_deepthink_pipeline_state(&state, Some(SpawnPreset::DeepthinkReviewer), language)
+                .expect("review should follow synthesis");
+        assert_eq!(state.stage, DeepthinkPipelineStage::Review);
+
+        let Err(expert_after_review) =
+            next_deepthink_pipeline_state(&state, Some(SpawnPreset::DeepthinkExpert), language)
+        else {
+            panic!("expert should not run immediately after review");
+        };
+        assert_eq!(
+            expert_after_review,
+            FunctionCallError::RespondToModel(
+                tr(
+                    language,
+                    "collab.deepthink.error.requires_collect_after_review"
+                )
+                .to_string()
+            )
+        );
+
+        state = next_deepthink_pipeline_state(&state, Some(SpawnPreset::DeepthinkWorker), language)
+            .expect("review fail loop should return to collect via worker/search");
+        assert_eq!(state.stage, DeepthinkPipelineStage::Collect);
+        assert!(state.collected_since_last_collect_cycle);
+    }
+
+    #[tokio::test]
+    async fn spawn_agent_rejects_deepthink_reviewer_before_expert_synthesis() {
+        let (mut session, mut turn) = make_session_and_context().await;
+        overwrite_turn_config(&mut turn, |config| {
+            config.max_spawn_depth = 2;
+        });
+        let manager = thread_manager();
+        let control = manager.agent_control();
+        session.services.agent_control = control.clone();
+        let root_thread_id = session.conversation_id;
+        let config = turn.config.as_ref().clone();
+        let deepthink_id = control
+            .spawn_agent_with_metadata(
+                config,
+                "deepthink planner".to_string(),
+                AgentSpawnMetadata {
+                    creator_thread_id: Some(root_thread_id),
+                    label: Some("deepthink".to_string()),
+                    allow_nested_agents: false,
+                    ..AgentSpawnMetadata::default()
+                },
+            )
+            .await
+            .expect("spawn deepthink");
+        session.conversation_id = deepthink_id;
+        persist_deepthink_pipeline_state(
+            deepthink_id,
+            DeepthinkPipelineState {
+                stage: DeepthinkPipelineStage::Collect,
+                collected_since_last_collect_cycle: true,
+                start_gate_approved: true,
+                history: Vec::new(),
+            },
+        );
+
+        let expected_message = tr(
+            turn.config.language,
+            "collab.deepthink.error.requires_expert_before_reviewer",
+        )
+        .to_string();
+        let reviewer_invocation = invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "items": [{"type": "text", "text": "review proposal completeness"}],
+                "preset": "deepthink-reviewer"
+            })),
+        );
+        let Err(err) = CollabHandler.handle(reviewer_invocation).await else {
+            panic!("deepthink reviewer should require expert synthesis first");
+        };
+        assert_eq!(err, FunctionCallError::RespondToModel(expected_message));
+    }
+
+    #[tokio::test]
+    async fn deepthink_update_progress_rejects_non_deepthink_caller() {
+        let (session, turn) = make_session_and_context().await;
+        let expected = tr(
+            turn.config.language,
+            "collab.deepthink.error.progress_update_forbidden",
+        )
+        .to_string();
+        let invocation = invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "deepthink_update_progress",
+            function_payload(json!({
+                "phase": "collecting",
+                "status": "in_progress",
+                "summary": "Collecting code facts"
+            })),
+        );
+        let Err(err) = CollabHandler.handle(invocation).await else {
+            panic!("non-deepthink caller should not update progress");
+        };
+        assert_eq!(err, FunctionCallError::RespondToModel(expected));
+    }
+
+    #[tokio::test]
+    async fn deepthink_progress_update_and_get_roundtrip() {
+        let (session, mut turn) = make_session_and_context().await;
+        turn.session_source = SessionSource::SubAgent(SubAgentSource::Other("deepthink".into()));
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+
+        let update_invocation = invocation(
+            session.clone(),
+            turn.clone(),
+            "deepthink_update_progress",
+            function_payload(json!({
+                "phase": "reviewing",
+                "status": "completed",
+                "summary": "Final review approved"
+            })),
+        );
+        let update_output = CollabHandler
+            .handle(update_invocation)
+            .await
+            .expect("deepthink progress update should succeed");
+        let ToolOutput::Function {
+            body: FunctionCallOutputBody::Text(update_content),
+            success: update_success,
+            ..
+        } = update_output
+        else {
+            panic!("expected function output");
+        };
+        assert_eq!(update_success, Some(true));
+        let update_value: serde_json::Value =
+            serde_json::from_str(&update_content).expect("update json");
+        assert_eq!(update_value.get("stage"), Some(&json!("complete")));
+
+        let get_invocation = invocation(
+            session,
+            turn,
+            "deepthink_get_progress",
+            function_payload(json!({})),
+        );
+        let get_output = CollabHandler
+            .handle(get_invocation)
+            .await
+            .expect("deepthink progress get should succeed");
+        let ToolOutput::Function {
+            body: FunctionCallOutputBody::Text(get_content),
+            success: get_success,
+            ..
+        } = get_output
+        else {
+            panic!("expected function output");
+        };
+        assert_eq!(get_success, Some(true));
+        let get_value: serde_json::Value = serde_json::from_str(&get_content).expect("get json");
+        assert_eq!(get_value.get("stage"), Some(&json!("complete")));
+        let history = get_value
+            .get("history")
+            .and_then(serde_json::Value::as_array)
+            .expect("history array");
+        assert!(!history.is_empty());
+    }
+
+    #[tokio::test]
+    async fn deepthink_progress_review_blocked_loops_back_to_collect() {
+        let (session, mut turn) = make_session_and_context().await;
+        turn.session_source = SessionSource::SubAgent(SubAgentSource::Other("deepthink".into()));
+        persist_deepthink_pipeline_state(
+            session.conversation_id,
+            DeepthinkPipelineState {
+                stage: DeepthinkPipelineStage::Review,
+                collected_since_last_collect_cycle: false,
+                start_gate_approved: true,
+                history: Vec::new(),
+            },
+        );
+        let deepthink_id = session.conversation_id;
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+
+        let update_invocation = invocation(
+            session.clone(),
+            turn.clone(),
+            "deepthink_update_progress",
+            function_payload(json!({
+                "phase": "reviewing",
+                "status": "blocked",
+                "summary": "Need more data before approval"
+            })),
+        );
+        let update_output = CollabHandler
+            .handle(update_invocation)
+            .await
+            .expect("review blocked update should succeed");
+        let ToolOutput::Function {
+            body: FunctionCallOutputBody::Text(update_content),
+            success: update_success,
+            ..
+        } = update_output
+        else {
+            panic!("expected function output");
+        };
+        assert_eq!(update_success, Some(true));
+        let update_value: serde_json::Value =
+            serde_json::from_str(&update_content).expect("update json");
+        assert_eq!(update_value.get("stage"), Some(&json!("collect")));
+
+        let get_invocation = invocation(
+            session,
+            turn,
+            "deepthink_get_progress",
+            function_payload(json!({"deepthink_agent_id": deepthink_id.to_string()})),
+        );
+        let get_output = CollabHandler
+            .handle(get_invocation)
+            .await
+            .expect("deepthink progress get should succeed");
+        let ToolOutput::Function {
+            body: FunctionCallOutputBody::Text(get_content),
+            success: get_success,
+            ..
+        } = get_output
+        else {
+            panic!("expected function output");
+        };
+        assert_eq!(get_success, Some(true));
+        let get_value: serde_json::Value = serde_json::from_str(&get_content).expect("get json");
+        assert_eq!(get_value.get("stage"), Some(&json!("collect")));
+        let history = get_value
+            .get("history")
+            .and_then(serde_json::Value::as_array)
+            .expect("history array");
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].get("status"), Some(&json!("blocked")));
+    }
+
+    #[tokio::test]
+    async fn spawn_agent_rejects_builtin_preset_when_parent_is_deepthink() {
+        let (mut session, mut turn) = make_session_and_context().await;
+        overwrite_turn_config(&mut turn, |config| {
+            config.max_spawn_depth = 2;
+        });
+        let manager = thread_manager();
+        let control = manager.agent_control();
+        session.services.agent_control = control.clone();
+        let root_thread_id = session.conversation_id;
+        let config = turn.config.as_ref().clone();
+        let deepthink_id = control
+            .spawn_agent_with_metadata(
+                config,
+                "deepthink planner".to_string(),
+                AgentSpawnMetadata {
+                    creator_thread_id: Some(root_thread_id),
+                    label: Some("deepthink".to_string()),
+                    allow_nested_agents: false,
+                    ..AgentSpawnMetadata::default()
+                },
+            )
+            .await
+            .expect("spawn deepthink");
+        session.conversation_id = deepthink_id;
+        let expected_message = tr(
+            turn.config.language,
+            "collab.deepthink.error.requires_deepthink_preset",
+        )
+        .to_string();
+        let invocation = invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "items": [{"type": "text", "text": "read repo state"}],
+                "preset": "read"
+            })),
+        );
+        let Err(err) = CollabHandler.handle(invocation).await else {
+            panic!("deepthink should reject builtin presets");
+        };
+        assert_eq!(err, FunctionCallError::RespondToModel(expected_message));
+    }
+
+    #[tokio::test]
+    async fn spawn_agent_still_rejects_nested_expert_when_parent_is_deepthink() {
+        let (mut session, turn) = make_session_and_context().await;
+        let manager = thread_manager();
+        let control = manager.agent_control();
+        session.services.agent_control = control.clone();
+        let root_thread_id = session.conversation_id;
+        let config = turn.config.as_ref().clone();
+        let deepthink_id = control
+            .spawn_agent_with_metadata(
+                config,
+                "deepthink planner".to_string(),
+                AgentSpawnMetadata {
+                    creator_thread_id: Some(root_thread_id),
+                    label: Some("deepthink".to_string()),
+                    allow_nested_agents: true,
+                    ..AgentSpawnMetadata::default()
+                },
+            )
+            .await
+            .expect("spawn deepthink");
+        session.conversation_id = deepthink_id;
+        let expected_message = tr(
+            turn.config.language,
+            "collab.expert.error.deepthink_spawn_forbidden",
+        )
+        .to_string();
+        let invocation = invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "items": [{"type": "text", "text": "hard task"}],
+                "preset": "expert",
+                "must_call_reason": "Need specialist support",
+            })),
+        );
+        let Err(err) = CollabHandler.handle(invocation).await else {
+            panic!("expert spawn should still reject deepthink callers");
+        };
+        assert_eq!(err, FunctionCallError::RespondToModel(expected_message));
     }
 
     #[tokio::test]
@@ -4562,6 +6075,71 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn build_agent_spawn_config_deepthink_worker_preset_uses_normal_model() {
+        let (session, turn) = make_session_and_context().await;
+        let overrides = SpawnConfigOverrides {
+            preset: Some(SpawnPreset::DeepthinkWorker),
+            ..SpawnConfigOverrides::default()
+        };
+
+        let config = build_agent_spawn_config(&session, &turn, &overrides)
+            .await
+            .expect("deepthink worker preset config");
+
+        assert_eq!(
+            config.model,
+            Some(DEEPTHINK_WORKER_PRESET_MODEL.to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn build_agent_spawn_config_deepthink_reviewer_preset_uses_codex_model() {
+        let (session, turn) = make_session_and_context().await;
+        let overrides = SpawnConfigOverrides {
+            preset: Some(SpawnPreset::DeepthinkReviewer),
+            ..SpawnConfigOverrides::default()
+        };
+
+        let config = build_agent_spawn_config(&session, &turn, &overrides)
+            .await
+            .expect("deepthink reviewer preset config");
+
+        assert_eq!(
+            config.model,
+            Some(DEEPTHINK_REVIEWER_PRESET_MODEL.to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn build_agent_spawn_config_deepthink_search_preset_uses_search_model_with_guidance() {
+        let (session, turn) = make_session_and_context().await;
+        let overrides = SpawnConfigOverrides {
+            preset: Some(SpawnPreset::DeepthinkSearch),
+            ..SpawnConfigOverrides::default()
+        };
+
+        let config = build_agent_spawn_config(&session, &turn, &overrides)
+            .await
+            .expect("deepthink search preset config");
+        let guidance = tr(
+            turn.config.language,
+            DEEPTHINK_SEARCH_PRESET_INSTRUCTIONS_KEY,
+        );
+
+        assert_eq!(
+            config.model,
+            Some(DEEPTHINK_SEARCH_PRESET_MODEL.to_string())
+        );
+        assert_eq!(config.model_reasoning_effort, None);
+        assert!(
+            config
+                .base_instructions
+                .as_deref()
+                .is_some_and(|instructions| instructions.contains(guidance))
+        );
+    }
+
+    #[tokio::test]
     async fn build_agent_spawn_config_expert_preset_uses_default_expert_model() {
         let (session, turn) = make_session_and_context().await;
         let overrides = SpawnConfigOverrides {
@@ -4572,6 +6150,27 @@ mod tests {
         let config = build_agent_spawn_config(&session, &turn, &overrides)
             .await
             .expect("expert preset config");
+        assert_eq!(config.model, Some(EXPERT_PRESET_MODEL.to_string()));
+
+        let model_info = session
+            .services
+            .models_manager
+            .get_model_info(EXPERT_PRESET_MODEL, &config)
+            .await;
+        assert_eq!(model_info.context_window, Some(400_000));
+    }
+
+    #[tokio::test]
+    async fn build_agent_spawn_config_deepthink_expert_preset_uses_default_expert_model() {
+        let (session, turn) = make_session_and_context().await;
+        let overrides = SpawnConfigOverrides {
+            preset: Some(SpawnPreset::DeepthinkExpert),
+            ..SpawnConfigOverrides::default()
+        };
+
+        let config = build_agent_spawn_config(&session, &turn, &overrides)
+            .await
+            .expect("deepthink expert preset config");
         assert_eq!(config.model, Some(EXPERT_PRESET_MODEL.to_string()));
 
         let model_info = session
