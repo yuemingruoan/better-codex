@@ -16,8 +16,7 @@ pub enum SlashCommand {
     // more frequently used commands should be listed first.
     Model,
     Lang,
-    Spec,
-    Preset,
+    Agent,
     Approvals,
     #[strum(serialize = "setup-elevated-sandbox")]
     ElevateSandbox,
@@ -28,14 +27,11 @@ pub enum SlashCommand {
     Fork,
     Init,
     Compact,
-    Collab,
     // Undo,
     Diff,
     Clean,
     Mention,
     Status,
-    SddDevelop,
-    SddDevelopParallels,
     Mcp,
     Logout,
     Quit,
@@ -64,15 +60,9 @@ impl SlashCommand {
             SlashCommand::Mention => tr(language, "slash_command.description.mention"),
             SlashCommand::Skills => tr(language, "slash_command.description.skills"),
             SlashCommand::Status => tr(language, "slash_command.description.status"),
-            SlashCommand::SddDevelop => tr(language, "slash_command.description.sdd_develop"),
-            SlashCommand::SddDevelopParallels => {
-                tr(language, "slash_command.description.sdd_develop_parallels")
-            }
             SlashCommand::Model => tr(language, "slash_command.description.model"),
             SlashCommand::Lang => tr(language, "slash_command.description.lang"),
-            SlashCommand::Spec => tr(language, "slash_command.description.spec"),
-            SlashCommand::Preset => tr(language, "slash_command.description.preset"),
-            SlashCommand::Collab => tr(language, "slash_command.description.collab"),
+            SlashCommand::Agent => tr(language, "slash_command.description.agent"),
             SlashCommand::Approvals => tr(language, "slash_command.description.approvals"),
             SlashCommand::ElevateSandbox => {
                 tr(language, "slash_command.description.elevate_sandbox")
@@ -98,12 +88,9 @@ impl SlashCommand {
             | SlashCommand::Fork
             | SlashCommand::Init
             | SlashCommand::Compact
-            | SlashCommand::SddDevelop
-            | SlashCommand::SddDevelopParallels
             | SlashCommand::Model
             | SlashCommand::Lang
-            | SlashCommand::Spec
-            | SlashCommand::Preset
+            | SlashCommand::Agent
             | SlashCommand::Approvals
             | SlashCommand::ElevateSandbox
             | SlashCommand::Review
@@ -115,7 +102,6 @@ impl SlashCommand {
             | SlashCommand::Status
             | SlashCommand::Mcp
             | SlashCommand::Feedback
-            | SlashCommand::Collab
             | SlashCommand::Quit
             | SlashCommand::Exit => true,
             SlashCommand::Rollout => true,
@@ -145,22 +131,19 @@ mod tests {
     use super::built_in_slash_commands;
 
     #[test]
-    fn spec_collab_and_preset_commands_are_available() {
+    fn agent_command_is_available_and_legacy_agent_entries_are_removed() {
         let commands = built_in_slash_commands();
         assert!(
             commands
                 .iter()
-                .any(|(name, command)| *name == "spec" && *command == SlashCommand::Spec)
+                .any(|(name, command)| *name == "agent" && *command == SlashCommand::Agent)
         );
-        assert!(
-            commands
-                .iter()
-                .any(|(name, command)| *name == "collab" && *command == SlashCommand::Collab)
-        );
-        assert!(
-            commands
-                .iter()
-                .any(|(name, command)| *name == "preset" && *command == SlashCommand::Preset)
-        );
+        assert!(commands.iter().all(|(name, _)| {
+            *name != "spec"
+                && *name != "preset"
+                && *name != "collab"
+                && *name != "sdd-develop"
+                && *name != "sdd-develop-parallels"
+        }));
     }
 }

@@ -37,7 +37,7 @@ personality = "customize how Codex communicates"
 plan = "switch to plan mode"
 collab = "choose a collaboration mode"
 preset = "configure built-in sub-agent presets"
-agent = "select an agent"
+agent = "open merged agent control center"
 
 [status_line_setup]
 title = "Configure Status Line"
@@ -756,6 +756,26 @@ continue_remember_desc = "Enable full access and remember this choice"
 chinese_desc = "Use Simplified Chinese for UI and prompts"
 english_desc = "Use English for UI and prompts"
 title = "Select language"
+
+[chatwidget.agent_popup]
+title = "Agent Control Center"
+subtitle = "Merged entry for collaboration, sub-agent presets, specs, and workflow routing."
+collab = "Collaboration mode"
+collab_desc = "Configure Plan/Proxy/Close orchestration for main and sub-agents."
+preset = "Sub-agent presets"
+preset_desc = "Configure default model and reasoning overrides for built-in sub-agent presets."
+spec = "Request specs"
+spec_desc = "Configure built-in request guidance such as Parallel Priority."
+workflow = "SDD workflow"
+workflow_desc = "Choose and launch standard or parallel SDD workflow."
+
+[chatwidget.sdd_workflow_popup]
+title = "Choose SDD Workflow"
+subtitle = "Pick one workflow mode to start."
+standard = "Standard /sdd-develop"
+standard_desc = "Single main-agent workflow."
+parallels = "Parallels /sdd-develop-parallels"
+parallels_desc = "Main agent plus multiple sub-agents."
 
 [chatwidget.spec_popup]
 title = "Spec Settings"

@@ -49,10 +49,10 @@ sdd_planning = false
 
 - `parallel_priority = true`：在请求构建阶段动态注入内置 `Parallel Priority` 提示词。
 - `parallel_priority = false`（默认）：不注入该提示词。
-- `/spec` 中仅提供 `Parallel Priority` 的开关；且只有先通过 `/collab` 选择 `Plan` 或 `Proxy` 启用 collab 后，才能在 `/spec` 打开该选项。
+- `/agent` 聚合入口中的「Request Spec」仅提供 `Parallel Priority` 开关；且只有先通过 `/agent` 中的「Collaboration」选择 `Plan` 或 `Proxy` 启用 collab 后，才能打开该选项。
 - `sdd_planning = true`：在请求构建阶段动态注入内置 `SDD Planning` 提示词（用于 SDD 规划流程）。
 - `sdd_planning = false`（默认）：不注入该提示词。
-- `/sdd-develop` 与 `/sdd-develop-parallels` 在流程内会自动启用并注入 `SDD Planning` 提示词，流程收尾后恢复原设置。
+- `/agent` 中的 SDD 工作流路由（标准/并行）在流程内会自动启用并注入 `SDD Planning` 提示词，流程收尾后恢复原设置。
 - 提示词文本由程序内置并按当前 `language` 选择中英文，不依赖 `.codex/spec/AGENTS.md` 外部文件。
 
 ## sub-agent 预设（subagent_presets）
@@ -72,7 +72,7 @@ reasoning_effort = "low"
 - `model`：可选，覆盖该预设默认模型。
 - `reasoning_effort`：可选，覆盖该预设默认推理强度。
 - 不配置时，`edit/read/grep/run` 默认是 `gpt-5.3-codex + low`；`websearch` 默认是 `o4-mini-deep-research`（不设置推理强度覆盖）。
-- `/preset` 仅提供“设置模型覆盖 / 设置推理覆盖”两项操作；如需清空覆盖，请直接编辑 `config.toml` 删除对应字段。
+- `/agent` 聚合入口中的 sub-agent 预设仅提供“设置模型覆盖 / 设置推理覆盖”两项操作；如需清空覆盖，请直接编辑 `config.toml` 删除对应字段。
 
 ## JSON Schema
 

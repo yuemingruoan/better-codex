@@ -36,7 +36,7 @@ personality = "自定义 Codex 的交流风格"
 plan = "切换到计划模式"
 collab = "选择协作模式"
 preset = "配置内置 sub-agent 预设"
-agent = "选择代理"
+agent = "打开聚合 Agent 控制中心"
 logout = "注销 Codex 登录"
 
 [status_line_setup]
@@ -752,6 +752,26 @@ continue_remember_desc = "启用完全访问并记住该选择"
 chinese_desc = "界面与提示使用简体中文"
 english_desc = "界面与提示使用英语"
 title = "选择语言"
+
+[chatwidget.agent_popup]
+title = "Agent 控制中心"
+subtitle = "统一入口：协作模式、sub-agent 预设、请求规范与工作流路由。"
+collab = "协作模式"
+collab_desc = "配置主 Agent 与子 Agent 的 Plan/Proxy/Close 编排模式。"
+preset = "Sub-agent 预设"
+preset_desc = "配置内置 sub-agent 的默认模型与推理覆盖。"
+spec = "请求规范"
+spec_desc = "配置内置请求指引，例如 Parallel Priority。"
+workflow = "SDD 工作流"
+workflow_desc = "选择并启动标准或并行 SDD 工作流。"
+
+[chatwidget.sdd_workflow_popup]
+title = "选择 SDD 工作流"
+subtitle = "请选择一种工作流模式启动。"
+standard = "标准 /sdd-develop"
+standard_desc = "单主 Agent 工作流。"
+parallels = "并行 /sdd-develop-parallels"
+parallels_desc = "主 Agent + 多子 Agent 工作流。"
 
 [chatwidget.spec_popup]
 title = "规范设置"

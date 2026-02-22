@@ -150,7 +150,6 @@ use crate::bottom_pane::SelectionInteractionMode;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::custom_prompt_view::CustomPromptView;
-use crate::bottom_pane::parse_slash_name;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::clipboard_paste::clean_clipboard_cache;
 use crate::clipboard_paste::paste_image_as_data_url;
@@ -2408,12 +2407,6 @@ impl ChatWidget {
                 let prompt = init_prompt(self.config.language);
                 self.submit_user_message(prompt.to_string().into());
             }
-            SlashCommand::SddDevelop => {
-                self.handle_sdd_develop_command(None, SddWorkflow::Standard);
-            }
-            SlashCommand::SddDevelopParallels => {
-                self.handle_sdd_develop_command(None, SddWorkflow::Parallels);
-            }
             SlashCommand::Compact => {
                 self.app_event_tx.send(AppEvent::CodexOp(Op::Compact));
             }
@@ -2426,14 +2419,8 @@ impl ChatWidget {
             SlashCommand::Lang => {
                 self.open_language_popup();
             }
-            SlashCommand::Spec => {
-                self.open_spec_popup();
-            }
-            SlashCommand::Preset => {
-                self.open_preset_popup();
-            }
-            SlashCommand::Collab => {
-                self.open_collab_popup();
+            SlashCommand::Agent => {
+                self.app_event_tx.send(AppEvent::OpenAgentPopup);
             }
             SlashCommand::Approvals => {
                 self.open_approvals_popup();
@@ -2748,6 +2735,51 @@ impl ChatWidget {
                 self.add_info_message(require_description.to_string(), None);
             }
         }
+    }
+
+    pub(crate) fn start_sdd_workflow(&mut self, parallels: bool) {
+        let workflow = if parallels {
+            SddWorkflow::Parallels
+        } else {
+            SddWorkflow::Standard
+        };
+        self.handle_sdd_develop_command(None, workflow);
+    }
+
+    pub(crate) fn open_sdd_workflow_popup(&mut self) {
+        let language = self.config.language;
+        let items = vec![
+            SelectionItem {
+                name: tr(language, "chatwidget.sdd_workflow_popup.standard").to_string(),
+                description: Some(
+                    tr(language, "chatwidget.sdd_workflow_popup.standard_desc").to_string(),
+                ),
+                actions: vec![Box::new(|tx| {
+                    tx.send(AppEvent::StartSddWorkflow { parallels: false });
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: tr(language, "chatwidget.sdd_workflow_popup.parallels").to_string(),
+                description: Some(
+                    tr(language, "chatwidget.sdd_workflow_popup.parallels_desc").to_string(),
+                ),
+                actions: vec![Box::new(|tx| {
+                    tx.send(AppEvent::StartSddWorkflow { parallels: true });
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some(tr(language, "chatwidget.sdd_workflow_popup.title").to_string()),
+            subtitle: Some(tr(language, "chatwidget.sdd_workflow_popup.subtitle").to_string()),
+            footer_hint: Some(standard_popup_hint_line(language)),
+            items,
+            header: Box::new(()),
+            ..Default::default()
+        });
     }
 
     pub(crate) fn open_sdd_plan_options(&mut self) {
@@ -3270,22 +3302,6 @@ impl ChatWidget {
                     },
                 });
             }
-            SlashCommand::SddDevelop => {
-                let desc = if trimmed.is_empty() {
-                    None
-                } else {
-                    Some(trimmed.to_string())
-                };
-                self.handle_sdd_develop_command(desc, SddWorkflow::Standard);
-            }
-            SlashCommand::SddDevelopParallels => {
-                let desc = if trimmed.is_empty() {
-                    None
-                } else {
-                    Some(trimmed.to_string())
-                };
-                self.handle_sdd_develop_command(desc, SddWorkflow::Parallels);
-            }
             _ => self.dispatch_command(cmd),
         }
     }
@@ -3380,10 +3396,6 @@ impl ChatWidget {
             return;
         }
 
-        if self.try_handle_sdd_develop(&text) {
-            return;
-        }
-
         let (send_text, display_text) = self.apply_sdd_plan_rework_prefix(text);
 
         let mut items: Vec<UserInput> = Vec::new();
@@ -3459,28 +3471,6 @@ impl ChatWidget {
         } else {
             (text.clone(), text)
         }
-    }
-
-    fn try_handle_sdd_develop(&mut self, text: &str) -> bool {
-        if let Some((name, rest)) = parse_slash_name(text)
-            && let Some(workflow) = match name {
-                name if name == SlashCommand::SddDevelop.command() => Some(SddWorkflow::Standard),
-                name if name == SlashCommand::SddDevelopParallels.command() => {
-                    Some(SddWorkflow::Parallels)
-                }
-                _ => None,
-            }
-        {
-            let description = rest.trim();
-            let description = if description.is_empty() {
-                None
-            } else {
-                Some(description.to_string())
-            };
-            self.handle_sdd_develop_command(description, workflow);
-            return true;
-        }
-        false
     }
 
     /// Replay a subset of initial events into the UI to seed the transcript when
@@ -3987,8 +3977,49 @@ impl ChatWidget {
         });
     }
 
-    /// Open a popup to choose a quick auto model. Selecting "All models"
-    /// opens the full picker with every available preset.
+    pub(crate) fn open_agent_popup(&mut self) {
+        let language = self.config.language;
+        let items = vec![
+            SelectionItem {
+                name: tr(language, "chatwidget.agent_popup.collab").to_string(),
+                description: Some(tr(language, "chatwidget.agent_popup.collab_desc").to_string()),
+                actions: vec![Box::new(|tx| tx.send(AppEvent::OpenCollabPopup))],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: tr(language, "chatwidget.agent_popup.preset").to_string(),
+                description: Some(tr(language, "chatwidget.agent_popup.preset_desc").to_string()),
+                actions: vec![Box::new(|tx| tx.send(AppEvent::OpenPresetPopup))],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: tr(language, "chatwidget.agent_popup.spec").to_string(),
+                description: Some(tr(language, "chatwidget.agent_popup.spec_desc").to_string()),
+                actions: vec![Box::new(|tx| tx.send(AppEvent::OpenSpecPopup))],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: tr(language, "chatwidget.agent_popup.workflow").to_string(),
+                description: Some(tr(language, "chatwidget.agent_popup.workflow_desc").to_string()),
+                actions: vec![Box::new(|tx| tx.send(AppEvent::OpenSddWorkflowPopup))],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some(tr(language, "chatwidget.agent_popup.title").to_string()),
+            subtitle: Some(tr(language, "chatwidget.agent_popup.subtitle").to_string()),
+            footer_hint: Some(standard_popup_hint_line(language)),
+            items,
+            header: Box::new(()),
+            ..Default::default()
+        });
+    }
+
+    /// Open a popup to change UI language.
     pub(crate) fn open_language_popup(&mut self) {
         let ui_language = self.config.language;
         let items = vec![

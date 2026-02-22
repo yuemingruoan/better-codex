@@ -1681,6 +1681,24 @@ impl App {
                 return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
             }
             AppEvent::CodexOp(op) => self.chat_widget.submit_op(op),
+            AppEvent::OpenAgentPopup => {
+                self.chat_widget.open_agent_popup();
+            }
+            AppEvent::OpenCollabPopup => {
+                self.chat_widget.open_collab_popup();
+            }
+            AppEvent::OpenSpecPopup => {
+                self.chat_widget.open_spec_popup();
+            }
+            AppEvent::OpenPresetPopup => {
+                self.chat_widget.open_preset_popup();
+            }
+            AppEvent::OpenSddWorkflowPopup => {
+                self.chat_widget.open_sdd_workflow_popup();
+            }
+            AppEvent::StartSddWorkflow { parallels } => {
+                self.chat_widget.start_sdd_workflow(parallels);
+            }
             AppEvent::DiffResult(text) => {
                 // Clear the in-progress state in the bottom pane
                 self.chat_widget.on_diff_complete();

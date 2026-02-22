@@ -47,7 +47,6 @@ mod file_search_popup;
 mod footer;
 mod list_selection_view;
 mod prompt_args;
-pub(crate) use prompt_args::parse_slash_name;
 mod request_user_input;
 pub(crate) use request_user_input::RequestUserInputOverlay;
 mod skill_popup;

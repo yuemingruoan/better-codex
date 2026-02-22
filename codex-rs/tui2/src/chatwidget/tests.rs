@@ -1527,11 +1527,20 @@ async fn slash_fork_opens_picker() {
 }
 
 #[tokio::test]
-async fn slash_collab_selection_plan_enables_feature() {
+async fn slash_agent_opens_agent_popup() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::Agent);
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenAgentPopup));
+}
+
+#[tokio::test]
+async fn collab_popup_selection_plan_enables_feature() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.config.features.disable(Feature::Collab);
 
-    chat.dispatch_command(SlashCommand::Collab);
+    chat.open_collab_popup();
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
     let mut saw_update = false;
@@ -1545,11 +1554,11 @@ async fn slash_collab_selection_plan_enables_feature() {
 }
 
 #[tokio::test]
-async fn slash_collab_selection_proxy_enables_feature() {
+async fn collab_popup_selection_proxy_enables_feature() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.config.features.disable(Feature::Collab);
 
-    chat.dispatch_command(SlashCommand::Collab);
+    chat.open_collab_popup();
     chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
@@ -1567,11 +1576,11 @@ async fn slash_collab_selection_proxy_enables_feature() {
 }
 
 #[tokio::test]
-async fn slash_collab_selection_close_disables_feature() {
+async fn collab_popup_selection_close_disables_feature() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.config.features.enable(Feature::Collab);
 
-    chat.dispatch_command(SlashCommand::Collab);
+    chat.open_collab_popup();
     chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -1590,12 +1599,12 @@ async fn slash_collab_selection_close_disables_feature() {
 }
 
 #[tokio::test]
-async fn slash_spec_selection_blocks_parallel_priority_enable_when_collab_disabled() {
+async fn spec_popup_selection_blocks_parallel_priority_enable_when_collab_disabled() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.config.features.disable(Feature::Collab);
     chat.config.spec.parallel_priority = false;
 
-    chat.dispatch_command(SlashCommand::Spec);
+    chat.open_spec_popup();
     chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
@@ -1606,12 +1615,12 @@ async fn slash_spec_selection_blocks_parallel_priority_enable_when_collab_disabl
 }
 
 #[tokio::test]
-async fn slash_spec_selection_enables_parallel_priority() {
+async fn spec_popup_selection_enables_parallel_priority() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.config.features.enable(Feature::Collab);
     chat.config.spec.parallel_priority = false;
 
-    chat.dispatch_command(SlashCommand::Spec);
+    chat.open_spec_popup();
     chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
@@ -1635,12 +1644,12 @@ async fn slash_spec_selection_enables_parallel_priority() {
 }
 
 #[tokio::test]
-async fn slash_spec_selection_disables_parallel_priority() {
+async fn spec_popup_selection_disables_parallel_priority() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.config.features.disable(Feature::Collab);
     chat.config.spec.parallel_priority = true;
 
-    chat.dispatch_command(SlashCommand::Spec);
+    chat.open_spec_popup();
     chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
@@ -1741,12 +1750,12 @@ async fn slash_rollout_handles_missing_path() {
 }
 
 #[tokio::test]
-async fn slash_sdd_develop_parallels_requires_collab_feature() {
+async fn sdd_workflow_parallels_requires_collab_feature() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
 
-    chat.dispatch_command_with_args(
-        SlashCommand::SddDevelopParallels,
-        "implement parallels workflow".to_string(),
+    chat.handle_sdd_develop_command(
+        Some("implement parallels workflow".to_string()),
+        SddWorkflow::Parallels,
     );
 
     let cells = drain_insert_history(&mut rx);
@@ -1778,9 +1787,9 @@ async fn sdd_develop_parallels_plan_approval_sends_execute_prompt_without_create
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.config.features.enable(Feature::Collab);
 
-    chat.dispatch_command_with_args(
-        SlashCommand::SddDevelopParallels,
-        "implement parallels workflow".to_string(),
+    chat.handle_sdd_develop_command(
+        Some("implement parallels workflow".to_string()),
+        SddWorkflow::Parallels,
     );
     let initial_ops = drain_ops(&mut op_rx);
     assert!(
@@ -1839,9 +1848,9 @@ async fn sdd_develop_parallels_plan_approval_sends_execute_prompt_without_create
 async fn sdd_develop_standard_creates_branch_before_plan_prompt() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
 
-    chat.dispatch_command_with_args(
-        SlashCommand::SddDevelop,
-        "implement standard workflow".to_string(),
+    chat.handle_sdd_develop_command(
+        Some("implement standard workflow".to_string()),
+        SddWorkflow::Standard,
     );
     let initial_ops = drain_ops(&mut op_rx);
     assert!(
@@ -1881,9 +1890,9 @@ async fn sdd_develop_parallels_merge_sends_prompt_without_finalize_merge() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.config.features.enable(Feature::Collab);
 
-    chat.dispatch_command_with_args(
-        SlashCommand::SddDevelopParallels,
-        "implement parallels workflow".to_string(),
+    chat.handle_sdd_develop_command(
+        Some("implement parallels workflow".to_string()),
+        SddWorkflow::Parallels,
     );
     let _ = drain_ops(&mut op_rx);
     chat.on_sdd_plan_approved().await;
