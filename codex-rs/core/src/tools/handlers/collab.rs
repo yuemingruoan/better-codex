@@ -54,6 +54,7 @@ pub(crate) const MAX_WAIT_TIMEOUT_MS: i64 = 300_000;
 const ALLOWED_SPAWN_PRESETS: [&str; 6] = ["edit", "read", "grep", "run", "websearch", "expert"];
 const EXPERT_MAX_ROUNDS_PER_WINDOW: u8 = 3;
 const EXPERT_PRESET_MODEL: &str = "gpt-5.2-pro";
+const WEBSEARCH_PRESET_INSTRUCTIONS_KEY: &str = "collab.subagent.websearch.base_instructions";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SpawnPreset {
@@ -1516,6 +1517,7 @@ async fn build_agent_spawn_config(
         })?;
 
     apply_spawn_model_overrides(session, turn, &mut config, overrides).await?;
+    apply_spawn_preset_instructions(turn, &mut config, overrides);
     let allow_subagent_permission_escalation = config.allow_subagent_permission_escalation;
     apply_spawn_permission_overrides(
         turn,
@@ -1525,6 +1527,33 @@ async fn build_agent_spawn_config(
     )?;
 
     Ok(config)
+}
+
+fn apply_spawn_preset_instructions(
+    turn: &TurnContext,
+    config: &mut Config,
+    overrides: &SpawnConfigOverrides,
+) {
+    if !matches!(
+        overrides.preset,
+        Some(SpawnPreset::Builtin(SubagentPreset::Websearch))
+    ) {
+        return;
+    }
+
+    let guidance = tr(turn.config.language, WEBSEARCH_PRESET_INSTRUCTIONS_KEY);
+    if guidance.trim().is_empty() {
+        return;
+    }
+
+    let base_instructions = config.base_instructions.get_or_insert_with(String::new);
+    if base_instructions.contains(guidance) {
+        return;
+    }
+    if !base_instructions.trim_end().is_empty() {
+        base_instructions.push_str("\n\n");
+    }
+    base_instructions.push_str(guidance);
 }
 
 fn build_agent_resume_config(
@@ -4491,6 +4520,27 @@ mod tests {
 
         assert_eq!(config.model, Some("o4-mini-deep-research".to_string()));
         assert_eq!(config.model_reasoning_effort, None);
+    }
+
+    #[tokio::test]
+    async fn build_agent_spawn_config_websearch_preset_appends_websearch_guidance() {
+        let (session, turn) = make_session_and_context().await;
+        let overrides = SpawnConfigOverrides {
+            preset: Some(SpawnPreset::Builtin(SubagentPreset::Websearch)),
+            ..SpawnConfigOverrides::default()
+        };
+
+        let config = build_agent_spawn_config(&session, &turn, &overrides)
+            .await
+            .expect("websearch preset config");
+        let guidance = tr(turn.config.language, WEBSEARCH_PRESET_INSTRUCTIONS_KEY);
+
+        assert!(
+            config
+                .base_instructions
+                .as_deref()
+                .is_some_and(|instructions| instructions.contains(guidance))
+        );
     }
 
     #[tokio::test]

@@ -1028,6 +1028,9 @@ reapproval_reason_required = "申请新的 expert 预算窗口时必须提供 mu
 owner_only = "仅 owner 线程 ${owner_thread_id} 可向该 expert 子 Agent 发送消息。"
 approval_declined = "用户未批准 expert 调用请求"
 
+[collab.subagent.websearch]
+base_instructions = "针对具体网址的检索与核验，优先使用本地 Codex 自带的 websearch 工具，直接传入目标 URL（或 site 限定查询），避免仅靠关键词猜测。"
+
 [command_popup]
 send_saved_prompt = "发送已保存的提示词"
 

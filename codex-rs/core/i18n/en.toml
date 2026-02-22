@@ -1032,6 +1032,9 @@ reapproval_reason_required = "must_call_reason is required to request a new expe
 owner_only = "Only the owner thread ${owner_thread_id} can send input to this expert sub-agent."
 approval_declined = "expert usage was not approved by the user"
 
+[collab.subagent.websearch]
+base_instructions = "For specific URL lookup or verification, use Codex built-in websearch directly with the target URL (or a site-restricted query) instead of keyword-only guessing."
+
 [command_popup]
 send_saved_prompt = "Send saved prompt"
 
