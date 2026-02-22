@@ -1869,12 +1869,7 @@ impl ChatWidget {
 
     pub(crate) fn handle_request_user_input_now(&mut self, ev: RequestUserInputEvent) {
         self.flush_answer_stream_with_separator();
-        self.pending_request_user_input
-            .retain(|pending| pending.call_id != ev.call_id);
-        self.pending_request_user_input.push_back(ev.clone());
-        self.add_boxed_history(Box::new(PlainHistoryCell::new(
-            self.request_user_input_history_lines(&ev, false),
-        )));
+        self.bottom_pane.push_user_input_request(ev);
         self.request_redraw();
     }
 

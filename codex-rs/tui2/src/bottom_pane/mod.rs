@@ -28,6 +28,7 @@ use codex_common::token_usage::TokenUsageSplit;
 use codex_core::features::Features;
 use codex_core::skills::model::SkillMetadata;
 use codex_file_search::FileMatch;
+use codex_protocol::request_user_input::RequestUserInputEvent;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
@@ -47,6 +48,8 @@ mod footer;
 mod list_selection_view;
 mod prompt_args;
 pub(crate) use prompt_args::parse_slash_name;
+mod request_user_input;
+pub(crate) use request_user_input::RequestUserInputOverlay;
 mod skill_popup;
 pub(crate) use list_selection_view::SelectionViewParams;
 mod feedback_view;
@@ -595,6 +598,26 @@ impl BottomPane {
             features.clone(),
             self.language,
         );
+        self.pause_status_timer_for_modal();
+        self.push_view(Box::new(modal));
+    }
+
+    /// Called when the agent requests user input.
+    pub fn push_user_input_request(&mut self, request: RequestUserInputEvent) {
+        let request = if let Some(view) = self.view_stack.last_mut() {
+            match view.try_consume_user_input_request(request) {
+                Some(request) => request,
+                None => {
+                    self.request_redraw();
+                    return;
+                }
+            }
+        } else {
+            request
+        };
+
+        let mut modal = RequestUserInputOverlay::new(request, self.app_event_tx.clone());
+        modal.set_language(self.language);
         self.pause_status_timer_for_modal();
         self.push_view(Box::new(modal));
     }

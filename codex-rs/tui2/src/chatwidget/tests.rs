@@ -2203,49 +2203,116 @@ async fn interrupted_turn_error_message_snapshot() {
 }
 
 #[tokio::test]
-async fn request_user_input_event_renders_history_cell() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+async fn request_user_input_event_opens_interactive_overlay_and_submits() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
     let event = sample_request_user_input_event("rui-call-1", "turn-1");
 
     chat.handle_codex_event(Event {
         id: "rui-call-1".into(),
-        msg: EventMsg::RequestUserInput(event.clone()),
+        msg: EventMsg::RequestUserInput(event),
     });
 
-    let cells = drain_insert_history(&mut rx);
-    assert_eq!(
-        cells.len(),
-        1,
-        "expected one request_user_input history cell"
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "interactive request_user_input should not render history-only output",
     );
 
-    let unanswered_count = event.questions.len().to_string();
-    let rendered = lines_to_single_string(&cells[0]);
-    let unanswered = tr_args(
-        chat.config.language,
-        "request_user_input.progress.unanswered",
-        &[("count", &unanswered_count)],
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains("request_user_input [rui-call-1]"),
+        "expected request header in overlay: {popup:?}",
     );
     assert!(
-        rendered.contains("request_user_input [rui-call-1]"),
-        "expected request id in history cell: {rendered:?}",
+        popup.contains("Which auth method should we use?"),
+        "expected question text in overlay: {popup:?}",
     );
     assert!(
-        rendered.contains(&unanswered),
-        "expected unanswered summary in history cell: {rendered:?}",
+        popup.contains("1. OAuth"),
+        "expected selectable options in overlay: {popup:?}",
     );
+
+    // Select second option and submit first question.
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let second_popup = render_bottom_popup(&chat, 80);
     assert!(
-        rendered.contains("Which auth method should we use?"),
-        "expected first question text in history cell: {rendered:?}",
+        second_popup.contains("What account id should be used?"),
+        "expected second question in overlay: {second_popup:?}",
     );
-    assert!(
-        rendered.contains("OAuth: Use browser-based OAuth flow."),
-        "expected option details in history cell: {rendered:?}",
+
+    // Fill second (freeform) question and submit all.
+    chat.handle_paste("acc-42".to_string());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let mut submitted_op: Option<Op> = None;
+    while let Ok(app_ev) = rx.try_recv() {
+        if let AppEvent::CodexOp(op) = app_ev {
+            submitted_op = Some(op);
+            break;
+        }
+    }
+    let op = submitted_op.expect("expected request_user_input AppEvent::CodexOp");
+    let Op::UserInputAnswer { id, response } = op.clone() else {
+        panic!("expected Op::UserInputAnswer");
+    };
+    assert_eq!(id, "turn-1");
+    assert_eq!(
+        response
+            .answers
+            .get("auth_method")
+            .map(|answer| answer.answers.clone()),
+        Some(vec!["API Key".to_string()]),
     );
     assert_eq!(
-        chat.pending_request_user_input.len(),
-        1,
-        "request_user_input should remain pending until turn resolves",
+        response
+            .answers
+            .get("account_id")
+            .map(|answer| answer.answers.clone()),
+        Some(vec!["acc-42".to_string()]),
+    );
+    chat.submit_op(op);
+    let forwarded = op_rx
+        .try_recv()
+        .expect("expected request_user_input op forwarded to codex channel");
+    assert!(matches!(forwarded, Op::UserInputAnswer { .. }));
+    assert!(
+        chat.pending_request_user_input.is_empty(),
+        "interactive request should not remain in pending queue",
+    );
+}
+
+#[tokio::test]
+async fn request_user_input_esc_clears_note_then_interrupts() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let event = sample_request_user_input_event("rui-call-esc", "turn-esc");
+    chat.handle_codex_event(Event {
+        id: "rui-call-esc".into(),
+        msg: EventMsg::RequestUserInput(event),
+    });
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(
+        matches!(rx.try_recv(), Err(TryRecvError::Empty)),
+        "first Esc should clear note without sending interrupt",
+    );
+    let popup_after_first_esc = render_bottom_popup(&chat, 80);
+    assert!(
+        popup_after_first_esc.contains("request_user_input [rui-call-esc]"),
+        "overlay should stay open after first Esc: {popup_after_first_esc:?}",
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    let event = rx
+        .try_recv()
+        .expect("expected interrupt event on second Esc");
+    assert_matches!(event, AppEvent::CodexOp(Op::Interrupt));
+    let popup_after_second_esc = render_bottom_popup(&chat, 80);
+    assert!(
+        !popup_after_second_esc.contains("request_user_input [rui-call-esc]"),
+        "overlay should close after second Esc: {popup_after_second_esc:?}",
     );
 }
 
