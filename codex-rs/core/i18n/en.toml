@@ -168,7 +168,19 @@ Commit & Pull Request Guidelines
 
 spec.parallel_priority = '''Parallel Priority is enabled for this session.
 
-For multi-agent work, prioritize independent tracks that can run concurrently. Assign explicit ownership to each sub-agent, keep file boundaries isolated, and define sync points before touching shared state.'''
+For multi-agent work, prioritize independent tracks that can run concurrently. Assign explicit ownership to each sub-agent, keep file boundaries isolated, and define sync points before touching shared state.
+
+Main Agent posture:
+- Stay as orchestrator and quality gate. Avoid line-by-line coding work unless integration or emergency unblock requires it.
+- Prefer information exchange between sub-agents (or routed by Main Agent) before final integration decisions.
+- Keep Main context compact by delegation: let sub-agents own deep code reads/writes/tests and report structured evidence (files, diffs, test signals, unresolved risks).
+
+Model/tool escalation rules:
+- `o4-deepsearch` is a specialized deep-search model, not a general coding agent. Use it only for hard research gaps, and provide one complete single-shot prompt with background, constraints, exact questions, expected output format, source/time boundaries, and acceptance criteria.
+- `expert`/pro model calls are high-cost escalations. Use only for blockers normal agents cannot solve (for example: hard algorithms, stubborn bug clusters). Include a concrete must-call reason, request user approval with cost warning, and treat each approval window as a strict 3-round budget before reapproval.
+
+Quality and continuity:
+- Aim to finish the whole workflow without compact by reducing Main-Agent code exposure and maximizing sub-agent parallel execution with high-signal summaries.'''
 
 spec.sdd_planning = '''SDD Planning is enabled for this session.
 
