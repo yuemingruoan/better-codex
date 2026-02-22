@@ -1043,13 +1043,44 @@ cancel_desc = "拒绝本次请求，保持当前预算不变。"
 
 [collab.expert.error]
 subagent_spawn_forbidden = "expert 预设仅允许由决策/根 Agent 创建"
-reason_required = "当 preset=expert 时必须提供 must_call_reason"
+deepthink_spawn_forbidden = "deepthink Agent 不允许调用 expert 预设，请通过决策/根 Agent 升级申请"
+reason_required = "当 preset=expert 或 preset=deepthink-expert 时必须提供 must_call_reason"
 reapproval_reason_required = "申请新的 expert 预算窗口时必须提供 must_call_reason"
 owner_only = "仅 owner 线程 ${owner_thread_id} 可向该 expert 子 Agent 发送消息。"
 approval_declined = "用户未批准 expert 调用请求"
 
+[collab.deepthink.approval]
+header = "批准启动 deepthink 流程？"
+question = "该操作会启动由 deepthink-expert 主导的高成本 deepthink 流程。是否批准本次 deepthink 一次性启动？必要理由：${reason}"
+
+[collab.deepthink.option]
+approve_desc = "允许本次 deepthink 一次性启动。"
+cancel_desc = "拒绝本次请求，保持 deepthink 未启动。"
+
+[collab.deepthink.error]
+approval_declined = "用户未批准 deepthink 流程启动请求"
+requires_deepthink_preset = "deepthink Agent 创建子 Agent 时必须使用 deepthink-expert|deepthink-search|deepthink-worker|deepthink-reviewer 预设之一"
+requires_expert_first = "deepthink 流水线必须先调用 deepthink-expert 进行初步规划"
+requires_collect_before_synthesis = "进入 deepthink-expert 综合阶段前，至少需要一次 deepthink-search 或 deepthink-worker 的采集"
+requires_expert_before_reviewer = "调用 deepthink-reviewer 前必须先完成 expert 综合阶段"
+requires_collect_after_review = "在 deepthink-reviewer 之后，如需继续，必须先回到 deepthink-search 或 deepthink-worker 采集阶段"
+pipeline_completed = "deepthink 流水线已标记完成；如需继续请开启新的 deepthink 线程"
+progress_update_forbidden = "只有 deepthink 编排线程可以更新 deepthink 进度"
+
 [collab.subagent.websearch]
 base_instructions = "针对具体网址的检索与核验，优先使用本地 Codex 自带的 websearch 工具，直接传入目标 URL（或 site 限定查询），避免仅靠关键词猜测。"
+
+[collab.subagent.deepthink_expert]
+base_instructions = "你是 deepthink 的专家主导角色。先基于需求给出结构化拆解与执行步骤，明确需要由 search/worker 补充的证据；在采集完成后，输出完整实现方案，并将关键决策与证据逐条对应。"
+
+[collab.subagent.deepthink_search]
+base_instructions = "你是 deepthink 检索专家。使用 o4-mini-deep-research 作为专门研究模型（不是通用编码 Agent）。接收一次性完整 Prompt，系统收集外部事实，输出“证据优先”的结论，并明确不确定项。"
+
+[collab.subagent.deepthink_worker]
+base_instructions = "你是 deepthink worker。负责本地重体力工作：代码仓库阅读、影响面梳理、常规验证执行等。保持 token 节省，输出客观事实，不做最终架构裁决。"
+
+[collab.subagent.deepthink_reviewer]
+base_instructions = "你是 deepthink 评审角色。对照原始需求与已收集证据审查专家方案完整性；若仍有缺口，明确列出缺失项并要求进入下一轮采集；若已完善，给出通过结论并注明残余风险。"
 
 [command_popup]
 send_saved_prompt = "发送已保存的提示词"
