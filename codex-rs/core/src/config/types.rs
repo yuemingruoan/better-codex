@@ -673,7 +673,7 @@ fn default_run_subagent_preset() -> SubagentPresetConfig {
 
 fn default_websearch_subagent_preset() -> SubagentPresetConfig {
     SubagentPresetConfig {
-        model: Some("o4-mini-deep-research".to_string()),
+        model: Some("gpt-5.3-codex-medium".to_string()),
         reasoning_effort: None,
     }
 }
@@ -1159,7 +1159,7 @@ mod tests {
             reasoning_effort: Some(ReasoningEffort::Medium),
         };
         let websearch_preset = SubagentPresetConfig {
-            model: Some("o4-mini-deep-research".to_string()),
+            model: Some("gpt-5.3-codex-medium".to_string()),
             reasoning_effort: None,
         };
         let defaults = SubagentPresetsConfig::default();

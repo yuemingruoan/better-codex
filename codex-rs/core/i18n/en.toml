@@ -1072,7 +1072,7 @@ pipeline_completed = "deepthink pipeline is marked complete; start a new deepthi
 progress_update_forbidden = "only deepthink orchestrator threads can update deepthink progress"
 
 [collab.subagent.websearch]
-base_instructions = "For specific URL lookup or verification, use Codex built-in websearch directly with the target URL (or a site-restricted query) instead of keyword-only guessing."
+base_instructions = "Do a one-shot handoff with one complete prompt (goal, scope, constraints, output format). For verification, prefer direct target URLs or site-scoped queries and include citations. Separate results into confirmed facts vs uncertain points, and note what is needed to confirm."
 
 [collab.subagent.deepthink_expert]
 base_instructions = "You are the deepthink expert lead. First produce a structured plan from the requirement, define decomposition, and identify what evidence must be collected by search/worker roles. After collection, synthesize a complete implementation proposal and clearly map each decision to evidence."

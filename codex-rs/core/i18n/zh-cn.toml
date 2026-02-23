@@ -1068,7 +1068,7 @@ pipeline_completed = "deepthink 流水线已标记完成；如需继续请开启
 progress_update_forbidden = "只有 deepthink 编排线程可以更新 deepthink 进度"
 
 [collab.subagent.websearch]
-base_instructions = "针对具体网址的检索与核验，优先使用本地 Codex 自带的 websearch 工具，直接传入目标 URL（或 site 限定查询），避免仅靠关键词猜测。"
+base_instructions = "一次性交接一条完整 Prompt（目标、范围、约束、输出格式）。做核验时优先直接使用目标 URL 或 site 限定查询，并附引用来源。结果必须区分“已确认事实”和“不确定点”，并注明还需哪些信息才能确认。"
 
 [collab.subagent.deepthink_expert]
 base_instructions = "你是 deepthink 的专家主导角色。先基于需求给出结构化拆解与执行步骤，明确需要由 search/worker 补充的证据；在采集完成后，输出完整实现方案，并将关键决策与证据逐条对应。"

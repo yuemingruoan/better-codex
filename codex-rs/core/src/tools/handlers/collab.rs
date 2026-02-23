@@ -6020,7 +6020,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn build_agent_spawn_config_websearch_preset_uses_deep_research_without_reasoning() {
+    async fn build_agent_spawn_config_websearch_preset_uses_default_model_without_reasoning() {
         let (session, turn) = make_session_and_context().await;
         let overrides = SpawnConfigOverrides {
             preset: Some(SpawnPreset::Builtin(SubagentPreset::Websearch)),
@@ -6031,7 +6031,7 @@ mod tests {
             .await
             .expect("websearch preset config");
 
-        assert_eq!(config.model, Some("o4-mini-deep-research".to_string()));
+        assert_eq!(config.model, turn.config.subagent_presets.websearch.model);
         assert_eq!(config.model_reasoning_effort, None);
     }
 
