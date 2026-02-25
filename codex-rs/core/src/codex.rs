@@ -385,7 +385,9 @@ impl Codex {
             developer_instructions: config.developer_instructions.clone(),
             user_instructions,
             spec_parallel_priority: config.spec.parallel_priority,
-            spec_sdd_planning: config.spec.sdd_planning,
+            // SDD Planning guidance is workflow-scoped and should only be enabled
+            // via runtime overrides (e.g. `/sdd-*` flow), not persisted config.
+            spec_sdd_planning: false,
             personality: config.personality,
             base_instructions,
             compact_prompt: config.compact_prompt.clone(),

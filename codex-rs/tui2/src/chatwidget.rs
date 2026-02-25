@@ -2007,6 +2007,9 @@ impl ChatWidget {
             model,
         } = common;
         let mut config = config;
+        // SDD Planning prompt injection is workflow-scoped. Ignore any persisted
+        // config value so only `/sdd-*` flows can enable it at runtime.
+        config.spec.sdd_planning = false;
         let model = model.filter(|m| !m.trim().is_empty());
         config.model = model.clone();
         let language = config.language;
@@ -2124,6 +2127,10 @@ impl ChatWidget {
             model,
             ..
         } = common;
+        let mut config = config;
+        // SDD Planning prompt injection is workflow-scoped. Ignore any persisted
+        // config value so only `/sdd-*` flows can enable it at runtime.
+        config.spec.sdd_planning = false;
         let model = model.filter(|m| !m.trim().is_empty());
         let language = config.language;
         let placeholder = example_prompt_placeholder(language);

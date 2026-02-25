@@ -776,16 +776,29 @@ async fn sdd_planning_spec_injected_when_enabled_and_removed_after_override() {
     )
     .await;
 
-    let mut builder = test_codex()
-        .with_auth(CodexAuth::from_api_key("Test API Key"))
-        .with_config(|config| {
-            config.spec.sdd_planning = true;
-        });
+    let mut builder = test_codex().with_auth(CodexAuth::from_api_key("Test API Key"));
     let codex = builder
         .build(&server)
         .await
         .expect("create new conversation")
         .codex;
+
+    codex
+        .submit(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            collaboration_mode: None,
+            personality: None,
+            spec_parallel_priority: None,
+            spec_sdd_planning: Some(true),
+        })
+        .await
+        .expect("enable sdd planning for request");
 
     codex
         .submit(Op::UserInput {
@@ -869,13 +882,29 @@ async fn sdd_planning_override_keeps_parallel_priority_injection() {
         .with_auth(CodexAuth::from_api_key("Test API Key"))
         .with_config(|config| {
             config.spec.parallel_priority = true;
-            config.spec.sdd_planning = true;
         });
     let codex = builder
         .build(&server)
         .await
         .expect("create new conversation")
         .codex;
+
+    codex
+        .submit(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            collaboration_mode: None,
+            personality: None,
+            spec_parallel_priority: None,
+            spec_sdd_planning: Some(true),
+        })
+        .await
+        .expect("enable sdd planning for request");
 
     codex
         .submit(Op::UserInput {
@@ -988,13 +1017,29 @@ async fn spec_instructions_only_injected_for_user_prompt_sampling_requests() {
         .with_auth(CodexAuth::from_api_key("Test API Key"))
         .with_config(|config| {
             config.spec.parallel_priority = true;
-            config.spec.sdd_planning = true;
         });
     let codex = builder
         .build(&server)
         .await
         .expect("create new conversation")
         .codex;
+
+    codex
+        .submit(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            collaboration_mode: None,
+            personality: None,
+            spec_parallel_priority: None,
+            spec_sdd_planning: Some(true),
+        })
+        .await
+        .expect("enable sdd planning for request");
 
     codex
         .submit(Op::UserInput {
