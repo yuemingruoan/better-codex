@@ -37,7 +37,7 @@ personality = "customize how Codex communicates"
 plan = "switch to plan mode"
 collab = "choose a collaboration mode"
 preset = "configure built-in sub-agent presets"
-agent = "select an agent"
+agent = "open merged agent control center"
 
 [status_line_setup]
 title = "Configure Status Line"
@@ -168,7 +168,19 @@ Commit & Pull Request Guidelines
 
 spec.parallel_priority = '''Parallel Priority is enabled for this session.
 
-For multi-agent work, prioritize independent tracks that can run concurrently. Assign explicit ownership to each sub-agent, keep file boundaries isolated, and define sync points before touching shared state.'''
+For multi-agent work, prioritize independent tracks that can run concurrently. Assign explicit ownership to each sub-agent, keep file boundaries isolated, and define sync points before touching shared state.
+
+Main Agent posture:
+- Stay as orchestrator and quality gate. Avoid line-by-line coding work unless integration or emergency unblock requires it.
+- Prefer information exchange between sub-agents (or routed by Main Agent) before final integration decisions.
+- Keep Main context compact by delegation: let sub-agents own deep code reads/writes/tests and report structured evidence (files, diffs, test signals, unresolved risks).
+
+Model/tool escalation rules:
+- `o4-deepsearch` is a specialized deep-search model, not a general coding agent. Use it only for hard research gaps, and provide one complete single-shot prompt with background, constraints, exact questions, expected output format, source/time boundaries, and acceptance criteria.
+- `expert`/pro model calls are high-cost escalations. Use only for blockers normal agents cannot solve (for example: hard algorithms, stubborn bug clusters). Include a concrete must-call reason, request user approval with cost warning, and treat each approval window as a strict 3-round budget before reapproval.
+
+Quality and continuity:
+- Aim to finish the whole workflow without compact by reducing Main-Agent code exposure and maximizing sub-agent parallel execution with high-signal summaries.'''
 
 spec.sdd_planning = '''SDD Planning is enabled for this session.
 
@@ -400,6 +412,16 @@ select_option = "Select an option to add notes"
 label = "None of the above"
 description = "Optionally, add details in notes (tab)."
 
+[request_user_input.banner]
+action_required = "Action required"
+high_impact = "High-impact confirmation"
+action_required_hint = "Review the prompt and respond to continue."
+high_impact_hint = "This action may consume higher budget. Confirm carefully."
+
+[request_user_input.section]
+options = "Options"
+notes = "Notes"
+
 [request_user_input.confirm_unanswered]
 title = "Submit with unanswered questions?"
 subtitle = "${count} unanswered ${suffix}"
@@ -415,6 +437,7 @@ tab_add_notes = "tab to add notes"
 tab_or_esc_clear_notes = "tab or esc to clear notes"
 enter_submit_answer = "enter to submit answer"
 enter_submit_all = "enter to submit all"
+up_down_select = "↑/↓ to select"
 ctrl_n_first_question = "ctrl + n first question"
 ctrl_n_next_question = "ctrl + n next question"
 esc_interrupt = "esc to interrupt"
@@ -734,6 +757,26 @@ chinese_desc = "Use Simplified Chinese for UI and prompts"
 english_desc = "Use English for UI and prompts"
 title = "Select language"
 
+[chatwidget.agent_popup]
+title = "Agent Control Center"
+subtitle = "Merged entry for collaboration, sub-agent presets, specs, and workflow routing."
+collab = "Collaboration mode"
+collab_desc = "Configure Plan/Proxy/Close orchestration for main and sub-agents."
+preset = "Sub-agent presets"
+preset_desc = "Configure default model and reasoning overrides for built-in sub-agent presets."
+spec = "Request specs"
+spec_desc = "Configure built-in request guidance such as Parallel Priority."
+workflow = "SDD workflow"
+workflow_desc = "Choose and launch standard or parallel SDD workflow."
+
+[chatwidget.sdd_workflow_popup]
+title = "Choose SDD Workflow"
+subtitle = "Pick one workflow mode to start."
+standard = "Standard /sdd-develop"
+standard_desc = "Single main-agent workflow."
+parallels = "Parallels /sdd-develop-parallels"
+parallels_desc = "Main agent plus multiple sub-agents."
+
 [chatwidget.spec_popup]
 title = "Spec Settings"
 subtitle = "These settings are embedded in requests and do not create .codex/spec files."
@@ -987,6 +1030,61 @@ requires_active_agent = "requires active sub-agent"
 plan = "plan"
 proxy = "proxy"
 close = "close"
+
+[collab.expert.approval]
+header = "Use Expert Sub-Agent?"
+question = "This action may incur high cost. Approve up to ${rounds} rounds for expert sub-agent usage? Required reason: ${reason}"
+
+[collab.expert.reapproval]
+header = "Expert Budget Exhausted"
+question = "The approved expert budget is exhausted. Approve another ${rounds} rounds? Required reason: ${reason}"
+
+[collab.expert.option]
+approve = "Approve"
+approve_desc = "Allow expert sub-agent usage for this budget window."
+cancel = "Cancel"
+cancel_desc = "Reject this request and keep the current budget unchanged."
+
+[collab.expert.error]
+subagent_spawn_forbidden = "expert preset can only be spawned by the decision/root agent"
+deepthink_spawn_forbidden = "deepthink agent cannot spawn expert preset; escalate via the decision/root agent"
+reason_required = "must_call_reason is required when preset=expert or preset=deepthink-expert"
+reapproval_reason_required = "must_call_reason is required to request a new expert budget window"
+owner_only = "Only the owner thread ${owner_thread_id} can send input to this expert sub-agent."
+approval_declined = "expert usage was not approved by the user"
+
+[collab.deepthink.approval]
+header = "Start Deepthink Workflow?"
+question = "This action starts a high-cost deepthink workflow led by deepthink-expert. Approve one-time start for this deepthink run? Required reason: ${reason}"
+
+[collab.deepthink.option]
+approve_desc = "Allow one-time deepthink workflow start for this run."
+cancel_desc = "Reject this request and keep deepthink stopped."
+
+[collab.deepthink.error]
+approval_declined = "deepthink workflow start was not approved by the user"
+requires_deepthink_preset = "deepthink agent must use one of deepthink-expert|deepthink-search|deepthink-worker|deepthink-reviewer presets when spawning sub-agents"
+requires_expert_first = "deepthink pipeline must start with deepthink-expert for initial planning"
+requires_collect_before_synthesis = "deepthink-expert synthesis requires at least one deepthink-search or deepthink-worker collection step first"
+requires_expert_before_reviewer = "deepthink-reviewer requires expert synthesis first"
+requires_collect_after_review = "after deepthink-reviewer, continue with deepthink-search or deepthink-worker before the next expert/reviewer call"
+pipeline_completed = "deepthink pipeline is marked complete; start a new deepthink thread to continue"
+progress_update_forbidden = "only deepthink orchestrator threads can update deepthink progress"
+
+[collab.subagent.websearch]
+base_instructions = "Do a one-shot handoff with one complete prompt (goal, scope, constraints, output format). For verification, prefer direct target URLs or site-scoped queries and include citations. Separate results into confirmed facts vs uncertain points, and note what is needed to confirm."
+
+[collab.subagent.deepthink_expert]
+base_instructions = "You are the deepthink expert lead. First produce a structured plan from the requirement, define decomposition, and identify what evidence must be collected by search/worker roles. After collection, synthesize a complete implementation proposal and clearly map each decision to evidence."
+
+[collab.subagent.deepthink_search]
+base_instructions = "You are the deepthink search specialist. Use o4-mini-deep-research as a dedicated research model (not a general coding agent). Accept one complete prompt, gather requested external facts comprehensively, and return evidence-first findings with citations and explicit uncertainties."
+
+[collab.subagent.deepthink_worker]
+base_instructions = "You are the deepthink worker. Execute local heavy-lifting tasks such as repository reading, impact mapping, and routine verification. Keep token usage efficient, return concise factual outputs, and avoid making final architectural decisions."
+
+[collab.subagent.deepthink_reviewer]
+base_instructions = "You are the deepthink reviewer. Audit completeness of the expert proposal against the original requirement and gathered evidence. If gaps remain, explicitly list missing items and request another collection loop; if complete, return an approval verdict with residual risks."
 
 [command_popup]
 send_saved_prompt = "Send saved prompt"

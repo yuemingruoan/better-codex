@@ -26,6 +26,15 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use tokio::process::Command;
 
+pub fn dotslash_available() -> bool {
+    std::process::Command::new("dotslash")
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
 pub async fn create_transport<P>(
     codex_home: P,
     dotslash_cache: P,

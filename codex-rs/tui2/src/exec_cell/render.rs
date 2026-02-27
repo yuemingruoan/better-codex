@@ -416,13 +416,17 @@ impl ExecCell {
         } else {
             tr(language, "exec_cell.command.ran")
         };
+        let title_span = match success {
+            Some(true) => title.green().bold(),
+            Some(false) => title.red().bold(),
+            None => title.cyan().bold(),
+        };
 
         let mut header_line = if is_interaction {
             Line::from(vec![bullet.clone(), " ".into()])
         } else {
-            Line::from(vec![bullet.clone(), " ".into(), title.bold(), " ".into()])
+            Line::from(vec![bullet.clone(), " ".into(), title_span])
         };
-        let header_prefix_width = header_line.width();
 
         let cmd_display = if call.is_unified_exec_interaction() {
             format_unified_exec_interaction(
@@ -435,42 +439,97 @@ impl ExecCell {
         };
         let highlighted_lines = highlight_bash_to_lines(&cmd_display);
 
-        let continuation_wrap_width = layout.command_continuation.wrap_width(width);
-        let continuation_opts =
-            RtOptions::new(continuation_wrap_width).word_splitter(WordSplitter::NoHyphenation);
+        let mut lines: Vec<Line<'static>> = Vec::new();
 
-        let mut continuation_lines: Vec<Line<'static>> = Vec::new();
+        if is_interaction {
+            let header_prefix_width = header_line.width();
+            let continuation_wrap_width = layout.command_continuation.wrap_width(width);
+            let continuation_opts =
+                RtOptions::new(continuation_wrap_width).word_splitter(WordSplitter::NoHyphenation);
 
-        if let Some((first, rest)) = highlighted_lines.split_first() {
-            let available_first_width = (width as usize).saturating_sub(header_prefix_width).max(1);
-            let first_opts =
-                RtOptions::new(available_first_width).word_splitter(WordSplitter::NoHyphenation);
-            let mut first_wrapped: Vec<Line<'static>> = Vec::new();
-            push_owned_lines(&word_wrap_line(first, first_opts), &mut first_wrapped);
-            let mut first_wrapped_iter = first_wrapped.into_iter();
-            if let Some(first_segment) = first_wrapped_iter.next() {
+            let mut continuation_lines: Vec<Line<'static>> = Vec::new();
+
+            if let Some((first, rest)) = highlighted_lines.split_first() {
+                let available_first_width =
+                    (width as usize).saturating_sub(header_prefix_width).max(1);
+                let first_opts = RtOptions::new(available_first_width)
+                    .word_splitter(WordSplitter::NoHyphenation);
+                let mut first_wrapped: Vec<Line<'static>> = Vec::new();
+                push_owned_lines(&word_wrap_line(first, first_opts), &mut first_wrapped);
+                let mut first_wrapped_iter = first_wrapped.into_iter();
+                if let Some(first_segment) = first_wrapped_iter.next() {
+                    header_line.extend(first_segment);
+                }
+                continuation_lines.extend(first_wrapped_iter);
+
+                for line in rest {
+                    push_owned_lines(
+                        &word_wrap_line(line, continuation_opts.clone()),
+                        &mut continuation_lines,
+                    );
+                }
+            }
+
+            lines.push(header_line);
+
+            let continuation_lines = self
+                .limit_lines_from_start(&continuation_lines, layout.command_continuation_max_lines);
+            if !continuation_lines.is_empty() {
+                lines.extend(prefix_lines(
+                    continuation_lines,
+                    Span::from(layout.command_continuation.initial_prefix).dim(),
+                    Span::from(layout.command_continuation.subsequent_prefix).dim(),
+                ));
+            }
+        } else {
+            let header_prefix_width = header_line.width();
+            let mut compact_first_segment: Option<Line<'static>> = None;
+            if let [first] = highlighted_lines.as_slice() {
+                let available_first_width =
+                    (width as usize).saturating_sub(header_prefix_width).max(1);
+                let first_opts = RtOptions::new(available_first_width)
+                    .word_splitter(WordSplitter::NoHyphenation);
+                let mut wrapped: Vec<Line<'static>> = Vec::new();
+                push_owned_lines(&word_wrap_line(first, first_opts), &mut wrapped);
+                if wrapped.len() == 1 {
+                    compact_first_segment = wrapped.into_iter().next();
+                }
+            }
+
+            if let Some(first_segment) = compact_first_segment {
+                header_line.push_span(" ");
                 header_line.extend(first_segment);
+                lines.push(header_line);
+            } else {
+                lines.push(header_line);
+
+                let command_wrap_width = layout.command_continuation.wrap_width(width);
+                let command_opts =
+                    RtOptions::new(command_wrap_width).word_splitter(WordSplitter::NoHyphenation);
+                let mut wrapped_command: Vec<Line<'static>> = Vec::new();
+                for line in &highlighted_lines {
+                    push_owned_lines(
+                        &word_wrap_line(line, command_opts.clone()),
+                        &mut wrapped_command,
+                    );
+                }
+
+                let command_max_lines = layout.command_continuation_max_lines.saturating_add(1);
+                let wrapped_command =
+                    self.limit_lines_from_start(&wrapped_command, command_max_lines);
+                if !wrapped_command.is_empty() {
+                    let (initial_prefix, subsequent_prefix) = if call.output.is_some() {
+                        ("  ├ ", "  │ ")
+                    } else {
+                        ("  └ ", "    ")
+                    };
+                    lines.extend(prefix_lines(
+                        wrapped_command,
+                        Span::from(initial_prefix).dim(),
+                        Span::from(subsequent_prefix).dim(),
+                    ));
+                }
             }
-            continuation_lines.extend(first_wrapped_iter);
-
-            for line in rest {
-                push_owned_lines(
-                    &word_wrap_line(line, continuation_opts.clone()),
-                    &mut continuation_lines,
-                );
-            }
-        }
-
-        let mut lines: Vec<Line<'static>> = vec![header_line];
-
-        let continuation_lines =
-            self.limit_lines_from_start(&continuation_lines, layout.command_continuation_max_lines);
-        if !continuation_lines.is_empty() {
-            lines.extend(prefix_lines(
-                continuation_lines,
-                Span::from(layout.command_continuation.initial_prefix).dim(),
-                Span::from(layout.command_continuation.subsequent_prefix).dim(),
-            ));
         }
 
         if let Some(output) = call.output.as_ref() {

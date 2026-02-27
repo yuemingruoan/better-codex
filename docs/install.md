@@ -40,7 +40,7 @@ just fmt
 just fix -p <crate-you-touched>
 
 # 运行相关测试（项目级最快），例如：
-cargo test -p codex-tui
+cargo test -p codex-tui2
 # 若安装了 cargo-nextest，`just test` 会通过 nextest 运行测试：
 just test
 # 如需完整的 `--all-features` 矩阵，请使用：
@@ -51,7 +51,7 @@ cargo test --all-features
 
 Codex 使用 Rust 编写，可通过 `RUST_LOG` 环境变量配置日志行为。
 
-TUI 默认使用 `RUST_LOG=codex_core=info,codex_tui=info,codex_rmcp_client=info`，日志默认写入 `~/.codex/log/codex-tui.log`。如需单次运行重定向日志目录，可使用 `-c log_dir=...`（例如 `-c log_dir=./.codex-log`）。
+TUI 默认使用 `RUST_LOG=codex_core=info,codex_tui2=info,codex_rmcp_client=info`，日志默认写入 `~/.codex/log/codex-tui.log`。如需单次运行重定向日志目录，可使用 `-c log_dir=...`（例如 `-c log_dir=./.codex-log`）。
 
 ```bash
 tail -F ~/.codex/log/codex-tui.log

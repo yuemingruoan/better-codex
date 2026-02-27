@@ -525,7 +525,16 @@ fn create_spawn_agent_parameters() -> JsonSchema {
         "preset".to_string(),
         JsonSchema::String {
             description: Some(
-                "Optional spawn preset (edit|read|grep|run|websearch) / 可选启动预设（edit|read|grep|run|websearch）"
+                "Optional spawn preset (edit|read|grep|run|websearch|expert|deepthink-expert|deepthink-search|deepthink-worker|deepthink-reviewer|deepthink-advisor). Deepthink pipeline follows deepthink-expert -> deepthink-search/deepthink-worker -> deepthink-expert -> deepthink-reviewer (repeat collection loop when review is incomplete). / 可选启动预设（edit|read|grep|run|websearch|expert|deepthink-expert|deepthink-search|deepthink-worker|deepthink-reviewer|deepthink-advisor）。deepthink 流水线遵循 deepthink-expert -> deepthink-search/deepthink-worker -> deepthink-expert -> deepthink-reviewer（评审未通过时回到采集阶段循环）。"
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "must_call_reason".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Required when preset=expert or preset=deepthink-expert. Explain why this high-cost escalation is necessary (expert budget window or deepthink one-time start approval)."
                     .to_string(),
             ),
         },
@@ -628,6 +637,15 @@ fn create_send_input_parameters() -> JsonSchema {
             JsonSchema::Boolean {
                 description: Some(
                     "When true, stop the agent's current task and handle this immediately. When false (default), queue this message."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "must_call_reason".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Required when sending to an expert agent after its 3-round budget is exhausted. Explain why another budget window is necessary."
                         .to_string(),
                 ),
             },
@@ -1016,6 +1034,87 @@ fn create_close_agents_tool() -> ToolSpec {
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["agent_ids".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_deepthink_update_progress_tool() -> ToolSpec {
+    let properties = BTreeMap::from([
+        (
+            "phase".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Current deepthink phase (planning|collecting|synthesizing|reviewing|completed)."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "status".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Progress status (pending|in_progress|completed|blocked).".to_string(),
+                ),
+            },
+        ),
+        (
+            "summary".to_string(),
+            JsonSchema::String {
+                description: Some("Required concise progress summary.".to_string()),
+            },
+        ),
+        (
+            "next_step".to_string(),
+            JsonSchema::String {
+                description: Some("Optional next action.".to_string()),
+            },
+        ),
+        (
+            "needs_more_context".to_string(),
+            JsonSchema::Boolean {
+                description: Some(
+                    "Optional reviewer signal; true means loop back to collection."
+                        .to_string(),
+                ),
+            },
+        ),
+    ]);
+    ToolSpec::Function(ResponsesApiTool {
+        name: "deepthink_update_progress".to_string(),
+        description:
+            "Update deepthink pipeline progress for the current deepthink orchestrator thread."
+                .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec![
+                "phase".to_string(),
+                "status".to_string(),
+                "summary".to_string(),
+            ]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_deepthink_get_progress_tool() -> ToolSpec {
+    let properties = BTreeMap::from([(
+        "deepthink_agent_id".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Optional deepthink thread id; defaults to current thread.".to_string(),
+            ),
+        },
+    )]);
+    ToolSpec::Function(ResponsesApiTool {
+        name: "deepthink_get_progress".to_string(),
+        description: "Read deepthink pipeline progress snapshot for user-facing reporting."
+            .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: None,
             additional_properties: Some(false.into()),
         },
     })
@@ -2655,6 +2754,8 @@ pub(crate) fn build_specs(
         builder.push_spec(create_rename_agent_tool());
         builder.push_spec(create_close_agent_tool());
         builder.push_spec(create_close_agents_tool());
+        builder.push_spec(create_deepthink_update_progress_tool());
+        builder.push_spec_with_parallel_support(create_deepthink_get_progress_tool(), true);
         builder.push_spec(create_claude_task_alias_tool());
         builder.push_spec_with_parallel_support(create_claude_task_output_alias_tool(), true);
         builder.push_spec(create_claude_task_stop_alias_tool());
@@ -2682,7 +2783,9 @@ pub(crate) fn build_specs(
         builder.register_handler("list_agents", collab_handler.clone());
         builder.register_handler("rename_agent", collab_handler.clone());
         builder.register_handler("close_agent", collab_handler.clone());
-        builder.register_handler("close_agents", collab_handler);
+        builder.register_handler("close_agents", collab_handler.clone());
+        builder.register_handler("deepthink_update_progress", collab_handler.clone());
+        builder.register_handler("deepthink_get_progress", collab_handler);
         builder.register_handler("Task", claude_tool_adapter_handler.clone());
         builder.register_handler("TaskOutput", claude_tool_adapter_handler.clone());
         builder.register_handler("TaskStop", claude_tool_adapter_handler.clone());
@@ -3492,6 +3595,8 @@ mod tests {
                 "rename_agent",
                 "close_agent",
                 "close_agents",
+                "deepthink_update_progress",
+                "deepthink_get_progress",
                 "Task",
                 "TaskOutput",
                 "TaskStop",
@@ -3539,6 +3644,8 @@ mod tests {
         assert!(!find_tool(&tools, "rename_agent").supports_parallel_tool_calls);
         assert!(!find_tool(&tools, "close_agent").supports_parallel_tool_calls);
         assert!(!find_tool(&tools, "close_agents").supports_parallel_tool_calls);
+        assert!(!find_tool(&tools, "deepthink_update_progress").supports_parallel_tool_calls);
+        assert!(find_tool(&tools, "deepthink_get_progress").supports_parallel_tool_calls);
         assert!(!find_tool(&tools, "Task").supports_parallel_tool_calls);
         assert!(!find_tool(&tools, "TaskStop").supports_parallel_tool_calls);
         assert!(!find_tool(&tools, "Skill").supports_parallel_tool_calls);

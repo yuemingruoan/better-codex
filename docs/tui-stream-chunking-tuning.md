@@ -4,8 +4,8 @@
 
 ## 范围
 
-在调整 `codex-rs/tui/src/streaming/chunking.rs` 中的队列压力阈值与滞回窗口，
-以及 `codex-rs/tui/src/app.rs` 中的基线提交节奏时，请使用本指南。
+在调整 `codex-rs/tui2/src/streaming/chunking.rs` 中的队列压力阈值与滞回窗口，
+以及 `codex-rs/tui2/src/app.rs` 中的基线提交节奏时，请使用本指南。
 
 本指南关注“调参”，而不是重设计策略。
 
@@ -15,7 +15,7 @@
   - `Smooth` 模式每个基线 tick 仅 drain 一行。
   - `CatchUp` 模式会立即 drain 队列积压。
 - 使用以下 trace 采集日志：
-  - `codex_tui::streaming::commit_tick`
+  - `codex_tui2::streaming::commit_tick`
 - 在持续输出、突发输出以及混合输出的提示词上评估。
 
 测量流程请参考 `docs/tui-stream-chunking-validation.md`。
@@ -32,7 +32,7 @@
 
 ### 基线提交节奏
 
-- `COMMIT_ANIMATION_TICK`（`tui/src/app.rs`）
+- `COMMIT_ANIMATION_TICK`（`tui2/src/app.rs`）
   - 数值更小：smooth 模式更新频率更高，稳态延迟更低。
   - 数值更大：平滑度更高，但可能提升感知延迟。
   - 一般在 chunking 阈值/保持区间稳定后再调整此项。
@@ -90,7 +90,7 @@
 
 ## 每轮调参后的验证清单
 
-- `cargo test -p codex-tui` 通过。
+- `cargo test -p codex-tui2` 通过。
 - trace 窗口显示队列年龄受控。
 - 模式切换未集中在短间隔重复周期。
 - 进入 `CatchUp` 后能快速清空积压。

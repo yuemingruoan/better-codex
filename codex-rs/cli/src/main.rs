@@ -22,12 +22,11 @@ use codex_exec::Command as ExecCommand;
 use codex_exec::ReviewArgs;
 use codex_execpolicy::ExecPolicyCheckCommand;
 use codex_responses_api_proxy::Args as ResponsesApiProxyArgs;
-use codex_tui::AppExitInfo;
-use codex_tui::Cli as TuiCli;
-use codex_tui::ExitReason;
-use codex_tui::update_action::UpdateAction;
 use codex_tui2 as tui2;
-use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_tui2::AppExitInfo;
+use codex_tui2::Cli as TuiCli;
+use codex_tui2::ExitReason;
+use codex_tui2::update_action::UpdateAction;
 use owo_colors::OwoColorize;
 use std::io::IsTerminal;
 use std::path::PathBuf;
@@ -47,10 +46,6 @@ use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::find_codex_home;
-use codex_core::config::load_config_as_toml_with_cli_overrides;
-use codex_core::features::Feature;
-use codex_core::features::FeatureOverrides;
-use codex_core::features::Features;
 use codex_core::features::Stage;
 use codex_core::features::is_known_feature_key;
 use codex_core::terminal::TerminalName;
@@ -376,8 +371,7 @@ struct StdioToUdsCommand {
 fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<String> {
     let AppExitInfo {
         token_usage,
-        thread_id: conversation_id,
-        thread_name,
+        conversation_id,
         ..
     } = exit_info;
 
@@ -390,9 +384,7 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
         codex_core::protocol::FinalOutput::from(token_usage)
     )];
 
-    if let Some(resume_cmd) =
-        codex_core::util::resume_command(thread_name.as_deref(), conversation_id)
-    {
+    if let Some(resume_cmd) = codex_core::util::resume_command(None, conversation_id) {
         let command = if color_enabled {
             resume_cmd.cyan().to_string()
         } else {
@@ -402,6 +394,16 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
     }
 
     lines
+}
+
+fn fatal_exit_info(message: impl Into<String>) -> AppExitInfo {
+    AppExitInfo {
+        token_usage: Default::default(),
+        conversation_id: None,
+        update_action: None,
+        exit_reason: ExitReason::Fatal(message.into()),
+        session_lines: Vec::new(),
+    }
 }
 
 /// Handle the app exit and print the results. Optionally run the update action.
@@ -873,7 +875,7 @@ async fn run_interactive_tui(
     let terminal_info = codex_core::terminal::terminal_info();
     if terminal_info.name == TerminalName::Dumb {
         if !(std::io::stdin().is_terminal() && std::io::stderr().is_terminal()) {
-            return Ok(AppExitInfo::fatal(
+            return Ok(fatal_exit_info(
                 "TERM is set to \"dumb\". Refusing to start the interactive TUI because no terminal is available for a confirmation prompt (stdin/stderr is not a TTY). Run in a supported terminal or unset TERM.",
             ));
         }
@@ -882,59 +884,13 @@ async fn run_interactive_tui(
             "WARNING: TERM is set to \"dumb\". Codex's interactive TUI may not work in this terminal."
         );
         if !confirm("Continue anyway? [y/N]: ")? {
-            return Ok(AppExitInfo::fatal(
+            return Ok(fatal_exit_info(
                 "Refusing to start the interactive TUI because TERM is set to \"dumb\". Run in a supported terminal or unset TERM.",
             ));
         }
     }
 
-    match select_tui_frontend(is_tui2_enabled(&interactive).await?) {
-        TuiFrontend::Tui2 => {
-            let result = tui2::run_main(interactive.into(), codex_linux_sandbox_exe).await?;
-            Ok(result.into())
-        }
-        TuiFrontend::Tui => codex_tui::run_main(interactive, codex_linux_sandbox_exe).await,
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TuiFrontend {
-    Tui,
-    Tui2,
-}
-
-fn select_tui_frontend(tui2_enabled: bool) -> TuiFrontend {
-    if tui2_enabled {
-        TuiFrontend::Tui2
-    } else {
-        TuiFrontend::Tui
-    }
-}
-
-/// Returns `Ok(true)` when the resolved configuration enables the `tui2` feature flag.
-///
-/// This performs a lightweight config load (honoring the same precedence as the lower-level TUI
-/// bootstrap: `$CODEX_HOME`, config.toml, profile, cwd, and CLI `-c` overrides) solely to decide
-/// which TUI frontend to launch. The full configuration is still loaded later by the selected TUI.
-async fn is_tui2_enabled(cli: &TuiCli) -> std::io::Result<bool> {
-    let raw_overrides = cli.config_overrides.raw_overrides.clone();
-    let overrides_cli = codex_common::CliConfigOverrides { raw_overrides };
-    let cli_kv_overrides = overrides_cli
-        .parse_overrides()
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
-
-    let codex_home = find_codex_home()?;
-    let cwd = cli.cwd.clone();
-    let config_cwd = match cwd.as_deref() {
-        Some(path) => AbsolutePathBuf::from_absolute_path(path)?,
-        None => AbsolutePathBuf::current_dir()?,
-    };
-    let config_toml =
-        load_config_as_toml_with_cli_overrides(&codex_home, &config_cwd, cli_kv_overrides).await?;
-    let config_profile = config_toml.get_config_profile(cli.config_profile.clone())?;
-    let features =
-        Features::from_config(&config_toml, &config_profile, FeatureOverrides::default());
-    Ok(features.enabled(Feature::Tui2))
+    tui2::run_main(interactive, codex_linux_sandbox_exe).await
 }
 
 fn confirm(prompt: &str) -> std::io::Result<bool> {
@@ -1137,7 +1093,7 @@ mod tests {
         app_server
     }
 
-    fn sample_exit_info(conversation_id: Option<&str>, thread_name: Option<&str>) -> AppExitInfo {
+    fn sample_exit_info(conversation_id: Option<&str>) -> AppExitInfo {
         let token_usage = TokenUsage {
             output_tokens: 2,
             total_tokens: 2,
@@ -1145,33 +1101,23 @@ mod tests {
         };
         AppExitInfo {
             token_usage,
-            thread_id: conversation_id
+            conversation_id: conversation_id
                 .map(ThreadId::from_string)
                 .map(Result::unwrap),
-            thread_name: thread_name.map(str::to_string),
             update_action: None,
             exit_reason: ExitReason::UserRequested,
+            session_lines: Vec::new(),
         }
-    }
-
-    #[test]
-    fn select_tui_frontend_uses_tui2_when_enabled() {
-        assert_eq!(select_tui_frontend(true), TuiFrontend::Tui2);
-    }
-
-    #[test]
-    fn select_tui_frontend_uses_tui_when_disabled() {
-        assert_eq!(select_tui_frontend(false), TuiFrontend::Tui);
     }
 
     #[test]
     fn format_exit_messages_skips_zero_usage() {
         let exit_info = AppExitInfo {
             token_usage: TokenUsage::default(),
-            thread_id: None,
-            thread_name: None,
+            conversation_id: None,
             update_action: None,
             exit_reason: ExitReason::UserRequested,
+            session_lines: Vec::new(),
         };
         let lines = format_exit_messages(exit_info, false);
         assert!(lines.is_empty());
@@ -1179,7 +1125,7 @@ mod tests {
 
     #[test]
     fn format_exit_messages_includes_resume_hint_without_color() {
-        let exit_info = sample_exit_info(Some("123e4567-e89b-12d3-a456-426614174000"), None);
+        let exit_info = sample_exit_info(Some("123e4567-e89b-12d3-a456-426614174000"));
         let lines = format_exit_messages(exit_info, false);
         assert_eq!(
             lines,
@@ -1193,26 +1139,10 @@ mod tests {
 
     #[test]
     fn format_exit_messages_applies_color_when_enabled() {
-        let exit_info = sample_exit_info(Some("123e4567-e89b-12d3-a456-426614174000"), None);
+        let exit_info = sample_exit_info(Some("123e4567-e89b-12d3-a456-426614174000"));
         let lines = format_exit_messages(exit_info, true);
         assert_eq!(lines.len(), 2);
         assert!(lines[1].contains("\u{1b}[36m"));
-    }
-
-    #[test]
-    fn format_exit_messages_prefers_thread_name() {
-        let exit_info = sample_exit_info(
-            Some("123e4567-e89b-12d3-a456-426614174000"),
-            Some("my-thread"),
-        );
-        let lines = format_exit_messages(exit_info, false);
-        assert_eq!(
-            lines,
-            vec![
-                "Token usage: total=2 input=0 output=2".to_string(),
-                "若要继续此会话，请运行 codex resume my-thread".to_string(),
-            ]
-        );
     }
 
     #[test]

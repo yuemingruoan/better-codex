@@ -1,5 +1,17 @@
 # Release Notes / 发布说明
 
+## Unreleased / 未发布
+
+### English
+- The update script now supports macOS Apple Silicon (arm64) only.
+- The script exits early in unsupported runtime environments.
+- Release workflow now verifies the macOS artifact is arm64-only before publishing.
+
+### 中文
+- 更新脚本改为仅支持 macOS Apple Silicon（arm64）。
+- 在不支持的运行环境中，脚本会提前退出。
+- 发布流程新增 macOS 产物架构校验，发布前确保仅包含 arm64。
+
 ## v1.7.5 (changes since 1.7.4)
 
 ### English

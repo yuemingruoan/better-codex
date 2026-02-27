@@ -338,11 +338,7 @@ impl ConfigDocument {
                     value(*acknowledged),
                 ))
             }
-            ConfigEdit::RecordModelMigrationSeen { from, to } => Ok(self.write_value(
-                Scope::Global,
-                &[Notice::TABLE_KEY, "model_migrations", from.as_str()],
-                value(to.clone()),
-            )),
+            ConfigEdit::RecordModelMigrationSeen { .. } => Ok(false),
             ConfigEdit::SetWindowsWslSetupAcknowledged(acknowledged) => Ok(self.write_value(
                 Scope::Global,
                 &["windows_wsl_setup_acknowledged"],
@@ -786,14 +782,6 @@ impl ConfigEditsBuilder {
         self
     }
 
-    pub fn set_spec_sdd_planning(mut self, enabled: bool) -> Self {
-        self.edits.push(ConfigEdit::SetPath {
-            segments: vec!["spec".to_string(), "sdd_planning".to_string()],
-            value: value(enabled),
-        });
-        self
-    }
-
     pub fn set_subagent_preset_model(
         mut self,
         preset: SubagentPreset,
@@ -1051,26 +1039,6 @@ model_reasoning_effort = "high"
             .get("spec")
             .and_then(TomlValue::as_table)
             .and_then(|table| table.get("parallel_priority"))
-            .and_then(TomlValue::as_bool);
-        assert_eq!(enabled, Some(true));
-    }
-
-    #[test]
-    fn blocking_set_spec_sdd_planning_nested() {
-        let tmp = tempdir().expect("tmpdir");
-        let codex_home = tmp.path();
-
-        ConfigEditsBuilder::new(codex_home)
-            .set_spec_sdd_planning(true)
-            .apply_blocking()
-            .expect("persist");
-
-        let raw = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
-        let value: TomlValue = toml::from_str(&raw).expect("parse config");
-        let enabled = value
-            .get("spec")
-            .and_then(TomlValue::as_table)
-            .and_then(|table| table.get("sdd_planning"))
             .and_then(TomlValue::as_bool);
         assert_eq!(enabled, Some(true));
     }
@@ -1552,7 +1520,7 @@ existing = "value"
     }
 
     #[test]
-    fn blocking_record_model_migration_seen_preserves_table() {
+    fn blocking_record_model_migration_seen_does_not_persist_mapping() {
         let tmp = tempdir().expect("tmpdir");
         let codex_home = tmp.path();
         std::fs::write(
@@ -1576,9 +1544,6 @@ existing = "value"
             std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
         let expected = r#"[notice]
 existing = "value"
-
-[notice.model_migrations]
-gpt-5 = "gpt-5.1"
 "#;
         assert_eq!(contents, expected);
     }

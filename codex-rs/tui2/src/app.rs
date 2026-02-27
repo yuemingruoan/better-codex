@@ -128,22 +128,6 @@ pub enum ExitReason {
     Fatal(String),
 }
 
-impl From<AppExitInfo> for codex_tui::AppExitInfo {
-    fn from(info: AppExitInfo) -> Self {
-        let exit_reason = match info.exit_reason {
-            ExitReason::UserRequested => codex_tui::ExitReason::UserRequested,
-            ExitReason::Fatal(message) => codex_tui::ExitReason::Fatal(message),
-        };
-        codex_tui::AppExitInfo {
-            token_usage: info.token_usage,
-            thread_id: info.conversation_id,
-            thread_name: None,
-            update_action: info.update_action.map(Into::into),
-            exit_reason,
-        }
-    }
-}
-
 fn session_summary(
     token_usage: TokenUsage,
     conversation_id: Option<ThreadId>,
@@ -1697,6 +1681,24 @@ impl App {
                 return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
             }
             AppEvent::CodexOp(op) => self.chat_widget.submit_op(op),
+            AppEvent::OpenAgentPopup => {
+                self.chat_widget.open_agent_popup();
+            }
+            AppEvent::OpenCollabPopup => {
+                self.chat_widget.open_collab_popup();
+            }
+            AppEvent::OpenSpecPopup => {
+                self.chat_widget.open_spec_popup();
+            }
+            AppEvent::OpenPresetPopup => {
+                self.chat_widget.open_preset_popup();
+            }
+            AppEvent::OpenSddWorkflowPopup => {
+                self.chat_widget.open_sdd_workflow_popup();
+            }
+            AppEvent::StartSddWorkflow { parallels } => {
+                self.chat_widget.start_sdd_workflow(parallels);
+            }
             AppEvent::DiffResult(text) => {
                 // Clear the in-progress state in the bottom pane
                 self.chat_widget.on_diff_complete();

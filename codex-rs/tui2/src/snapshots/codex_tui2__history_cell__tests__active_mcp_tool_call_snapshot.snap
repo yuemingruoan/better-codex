@@ -1,5 +1,7 @@
 ---
 source: tui2/src/history_cell.rs
+assertion_line: 2333
 expression: rendered
 ---
-• Calling search.find_docs({"query":"ratatui styling","limit":3})
+• Calling
+  └ search.find_docs({"query":"ratatui styling","limit":3})

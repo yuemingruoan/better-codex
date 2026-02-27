@@ -10,6 +10,7 @@ use anyhow::ensure;
 use codex_exec_server::ExecResult;
 use exec_server_test_support::InteractiveClient;
 use exec_server_test_support::create_transport;
+use exec_server_test_support::dotslash_available;
 use exec_server_test_support::notify_readable_sandbox;
 use exec_server_test_support::write_default_execpolicy;
 use maplit::hashset;
@@ -51,6 +52,11 @@ prefix_rule(
         codex_home.as_ref(),
     )
     .await?;
+    if !dotslash_available() {
+        eprintln!("Skipping accept_elicitation_for_prompt_rule: dotslash is not available in PATH");
+        return Ok(());
+    }
+
     let dotslash_cache_temp_dir = TempDir::new()?;
     let dotslash_cache = dotslash_cache_temp_dir.path();
     let transport = create_transport(codex_home.as_ref(), dotslash_cache).await?;

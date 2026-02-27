@@ -53,6 +53,21 @@ pub(crate) enum AppEvent {
     /// Open the fork picker inside the running TUI session.
     OpenForkPicker,
 
+    /// Open the merged agent control popup.
+    OpenAgentPopup,
+    /// Open the collaboration mode popup.
+    OpenCollabPopup,
+    /// Open the request spec popup.
+    OpenSpecPopup,
+    /// Open the sub-agent preset popup.
+    OpenPresetPopup,
+    /// Open the SDD workflow picker popup.
+    OpenSddWorkflowPopup,
+    /// Start SDD workflow from the picker.
+    StartSddWorkflow {
+        parallels: bool,
+    },
+
     /// Request to exit the application.
     ///
     /// Use `ShutdownFirst` for user-initiated quits so core cleanup runs and the

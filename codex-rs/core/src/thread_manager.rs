@@ -90,6 +90,22 @@ pub(crate) struct AgentSpawnMetadata {
     pub acceptance_criteria: Vec<String>,
     pub test_commands: Vec<String>,
     pub allow_nested_agents: bool,
+    pub expert_budget: Option<ExpertAgentBudget>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ExpertAgentBudget {
+    pub owner_thread_id: ThreadId,
+    pub remaining_rounds: u8,
+    pub max_rounds: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ExpertBudgetConsumeResult {
+    NotExpert,
+    Consumed(ExpertAgentBudget),
+    Exhausted(ExpertAgentBudget),
+    ForbiddenOwner { owner_thread_id: ThreadId },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,6 +117,7 @@ pub(crate) struct AgentRegistryRecord {
     pub acceptance_criteria: Vec<String>,
     pub test_commands: Vec<String>,
     pub allow_nested_agents: bool,
+    pub expert_budget: Option<ExpertAgentBudget>,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
     pub status: AgentStatus,
@@ -391,6 +408,7 @@ impl ThreadManagerState {
                 acceptance_criteria: metadata.acceptance_criteria,
                 test_commands: metadata.test_commands,
                 allow_nested_agents: metadata.allow_nested_agents,
+                expert_budget: metadata.expert_budget,
                 created_at_ms: timestamp_ms,
                 updated_at_ms: timestamp_ms,
                 status: AgentStatus::PendingInit,
@@ -418,6 +436,50 @@ impl ThreadManagerState {
             record.updated_at_ms = unix_timestamp_ms();
         }
         Ok(record.clone())
+    }
+
+    pub(crate) async fn set_agent_expert_budget(
+        &self,
+        agent_id: ThreadId,
+        expert_budget: Option<ExpertAgentBudget>,
+    ) -> CodexResult<AgentRegistryRecord> {
+        let mut registry = self.agent_registry.write().await;
+        let Some(record) = registry.get_mut(&agent_id) else {
+            return Err(CodexErr::ThreadNotFound(agent_id));
+        };
+        if record.expert_budget != expert_budget {
+            record.expert_budget = expert_budget;
+            record.updated_at_ms = unix_timestamp_ms();
+        }
+        Ok(record.clone())
+    }
+
+    pub(crate) async fn consume_agent_expert_budget_round(
+        &self,
+        agent_id: ThreadId,
+        sender_thread_id: ThreadId,
+    ) -> CodexResult<ExpertBudgetConsumeResult> {
+        let mut registry = self.agent_registry.write().await;
+        let Some(record) = registry.get_mut(&agent_id) else {
+            // Some tests and code paths can target active threads that are not tracked in
+            // agent_registry; treat them as non-expert and let the normal send path decide.
+            return Ok(ExpertBudgetConsumeResult::NotExpert);
+        };
+        let Some(expert_budget) = record.expert_budget.as_mut() else {
+            return Ok(ExpertBudgetConsumeResult::NotExpert);
+        };
+        if expert_budget.owner_thread_id != sender_thread_id {
+            return Ok(ExpertBudgetConsumeResult::ForbiddenOwner {
+                owner_thread_id: expert_budget.owner_thread_id,
+            });
+        }
+        if expert_budget.remaining_rounds == 0 {
+            return Ok(ExpertBudgetConsumeResult::Exhausted(expert_budget.clone()));
+        }
+
+        expert_budget.remaining_rounds = expert_budget.remaining_rounds.saturating_sub(1);
+        record.updated_at_ms = unix_timestamp_ms();
+        Ok(ExpertBudgetConsumeResult::Consumed(expert_budget.clone()))
     }
 
     pub(crate) async fn get_agent_record(&self, agent_id: ThreadId) -> Option<AgentRegistryRecord> {

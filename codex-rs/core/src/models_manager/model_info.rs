@@ -18,6 +18,8 @@ const LOCAL_FRIENDLY_TEMPLATE: &str =
     "You optimize for team morale and being a supportive teammate as much as code quality.";
 const LOCAL_PRAGMATIC_TEMPLATE: &str = "You are a deeply pragmatic, effective software engineer.";
 const PERSONALITY_PLACEHOLDER: &str = "{{ personality }}";
+const DEFAULT_FALLBACK_CONTEXT_WINDOW: i64 = 272_000;
+const DEEP_RESEARCH_CONTEXT_WINDOW: i64 = 200_000;
 
 pub(crate) fn with_config_overrides(mut model: ModelInfo, config: &Config) -> ModelInfo {
     if let Some(supports_reasoning_summaries) = config.model_supports_reasoning_summaries {
@@ -75,12 +77,19 @@ pub(crate) fn model_info_from_slug(slug: &str) -> ModelInfo {
         apply_patch_tool_type: None,
         truncation_policy: TruncationPolicyConfig::bytes(10_000),
         supports_parallel_tool_calls: false,
-        context_window: Some(272_000),
+        context_window: Some(fallback_context_window_for_slug(slug)),
         auto_compact_token_limit: None,
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
         input_modalities: default_input_modalities(),
         prefer_websockets: false,
+    }
+}
+
+fn fallback_context_window_for_slug(slug: &str) -> i64 {
+    match slug {
+        "o4-mini-deep-research" => DEEP_RESEARCH_CONTEXT_WINDOW,
+        _ => DEFAULT_FALLBACK_CONTEXT_WINDOW,
     }
 }
 
@@ -97,5 +106,24 @@ fn local_personality_messages_for_slug(slug: &str) -> Option<ModelMessages> {
             }),
         }),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DEEP_RESEARCH_CONTEXT_WINDOW;
+    use super::DEFAULT_FALLBACK_CONTEXT_WINDOW;
+    use super::model_info_from_slug;
+
+    #[test]
+    fn deep_research_uses_200k_context_window() {
+        let info = model_info_from_slug("o4-mini-deep-research");
+        assert_eq!(info.context_window, Some(DEEP_RESEARCH_CONTEXT_WINDOW));
+    }
+
+    #[test]
+    fn unknown_model_uses_default_context_window() {
+        let info = model_info_from_slug("unknown-fallback-model");
+        assert_eq!(info.context_window, Some(DEFAULT_FALLBACK_CONTEXT_WINDOW));
     }
 }

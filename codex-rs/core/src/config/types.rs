@@ -611,27 +611,71 @@ pub struct SubagentPresetConfig {
 
 impl Default for SubagentPresetConfig {
     fn default() -> Self {
-        Self {
-            model: Some("gpt-5.3-codex".to_string()),
-            reasoning_effort: Some(ReasoningEffort::Low),
-        }
+        default_edit_subagent_preset()
     }
 }
 
 /// Per-preset model overrides for built-in sub-agent presets.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct SubagentPresetsConfig {
-    #[serde(default)]
+    #[serde(default = "default_edit_subagent_preset")]
     pub edit: SubagentPresetConfig,
-    #[serde(default)]
+    #[serde(default = "default_read_subagent_preset")]
     pub read: SubagentPresetConfig,
-    #[serde(default)]
+    #[serde(default = "default_grep_subagent_preset")]
     pub grep: SubagentPresetConfig,
-    #[serde(default)]
+    #[serde(default = "default_run_subagent_preset")]
     pub run: SubagentPresetConfig,
-    #[serde(default)]
+    #[serde(default = "default_websearch_subagent_preset")]
     pub websearch: SubagentPresetConfig,
+}
+
+impl Default for SubagentPresetsConfig {
+    fn default() -> Self {
+        Self {
+            edit: default_edit_subagent_preset(),
+            read: default_read_subagent_preset(),
+            grep: default_grep_subagent_preset(),
+            run: default_run_subagent_preset(),
+            websearch: default_websearch_subagent_preset(),
+        }
+    }
+}
+
+fn default_edit_subagent_preset() -> SubagentPresetConfig {
+    SubagentPresetConfig {
+        model: Some("gpt-5.3-codex".to_string()),
+        reasoning_effort: Some(ReasoningEffort::XHigh),
+    }
+}
+
+fn default_read_subagent_preset() -> SubagentPresetConfig {
+    SubagentPresetConfig {
+        model: Some("gpt-5.2".to_string()),
+        reasoning_effort: Some(ReasoningEffort::Low),
+    }
+}
+
+fn default_grep_subagent_preset() -> SubagentPresetConfig {
+    SubagentPresetConfig {
+        model: Some("gpt-5.3-codex".to_string()),
+        reasoning_effort: Some(ReasoningEffort::Medium),
+    }
+}
+
+fn default_run_subagent_preset() -> SubagentPresetConfig {
+    SubagentPresetConfig {
+        model: Some("gpt-5.2".to_string()),
+        reasoning_effort: Some(ReasoningEffort::Medium),
+    }
+}
+
+fn default_websearch_subagent_preset() -> SubagentPresetConfig {
+    SubagentPresetConfig {
+        model: Some("gpt-5.3-codex-medium".to_string()),
+        reasoning_effort: None,
+    }
 }
 
 /// Settings for notices we display to users via the tui and app-server clients
@@ -1097,17 +1141,33 @@ mod tests {
     }
 
     #[test]
-    fn subagent_presets_default_to_gpt_5_3_codex_with_low_reasoning() {
-        let expected = SubagentPresetConfig {
+    fn subagent_presets_default_to_expected_models_and_reasoning() {
+        let edit_preset = SubagentPresetConfig {
             model: Some("gpt-5.3-codex".to_string()),
+            reasoning_effort: Some(ReasoningEffort::XHigh),
+        };
+        let read_preset = SubagentPresetConfig {
+            model: Some("gpt-5.2".to_string()),
             reasoning_effort: Some(ReasoningEffort::Low),
+        };
+        let grep_preset = SubagentPresetConfig {
+            model: Some("gpt-5.3-codex".to_string()),
+            reasoning_effort: Some(ReasoningEffort::Medium),
+        };
+        let run_preset = SubagentPresetConfig {
+            model: Some("gpt-5.2".to_string()),
+            reasoning_effort: Some(ReasoningEffort::Medium),
+        };
+        let websearch_preset = SubagentPresetConfig {
+            model: Some("gpt-5.3-codex-medium".to_string()),
+            reasoning_effort: None,
         };
         let defaults = SubagentPresetsConfig::default();
 
-        assert_eq!(defaults.edit, expected);
-        assert_eq!(defaults.read, expected);
-        assert_eq!(defaults.grep, expected);
-        assert_eq!(defaults.run, expected);
-        assert_eq!(defaults.websearch, expected);
+        assert_eq!(defaults.edit, edit_preset);
+        assert_eq!(defaults.read, read_preset);
+        assert_eq!(defaults.grep, grep_preset);
+        assert_eq!(defaults.run, run_preset);
+        assert_eq!(defaults.websearch, websearch_preset);
     }
 }
